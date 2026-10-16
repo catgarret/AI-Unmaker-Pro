@@ -37,39 +37,39 @@ jobs:
           pip install pyinstaller customtkinter tkinterdnd2 Pillow
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
-      # Windows 빌드 및 패키징 (xcopy 에러 수정)
+      # Windows 빌드 및 패키징 (파이썬 내장 모듈로 OS 문법 충돌 차단)
       - name: Build for Windows
         if: runner.os == 'Windows'
         run: |
           pyinstaller --noconfirm --noconsole --onefile --icon=icons/icon.ico --name "AI-Unmarker-Pro" --collect-all customtkinter --collect-all tkinterdnd2 main.py
-          mkdir release_pkg
-          copy dist\AI-Unmarker-Pro.exe release_pkg\
-          xcopy /E /I fonts release_pkg\fonts
-          xcopy /E /I icons release_pkg\icons
-          if exist remove-ai-watermarks\inference.py xcopy /E /I remove-ai-watermarks release_pkg\remove-ai-watermarks
-          if exist noai-watermark\inference.py xcopy /E /I noai-watermark release_pkg\noai-watermark
-          Compress-Archive -Path release_pkg\* -DestinationPath AI-Unmarker-Pro-Windows-x64.zip
+          python -c "import os, shutil; os.makedirs('release_pkg', exist_ok=True); shutil.copy('dist/AI-Unmarker-Pro.exe', 'release_pkg/') if os.path.exists('dist/AI-Unmarker-Pro.exe') else None; [shutil.copytree(f, os.path.join('release_pkg', f), dirs_exist_ok=True) for f in ['fonts', 'icons', 'remove-ai-watermarks', 'noai-watermark'] if os.path.isdir(f) and os.listdir(f)]; shutil.make_archive('AI-Unmarker-Pro-Windows-x64', 'zip', 'release_pkg')"
 
-      # macOS 빌드 및 패키징 (cp 에러 수정)
+      # macOS 빌드 및 패키징
       - name: Build for macOS
         if: runner.os == 'macOS'
         run: |
           pyinstaller --noconfirm --noconsole --windowed --icon=icons/icon.png --name "AI Unmarker Pro" --collect-all customtkinter --collect-all tkinterdnd2 main.py
           mkdir release_pkg
           cp -R "dist/AI Unmarker Pro.app" release_pkg/
-          cp -R fonts release_pkg/
-          cp -R icons release_pkg/
-          if [ -d "remove-ai-watermarks" ] && [ "$(ls -A remove-ai-watermarks)" ]; then cp -R remove-ai-watermarks release_pkg/; fi
-          if [ -d "noai-watermark" ] && [ "$(ls -A noai-watermark)" ]; then cp -R noai-watermark release_pkg/; fi
+          [ -d "fonts" ] && cp -R fonts release_pkg/
+          [ -d "icons" ] && cp -R icons release_pkg/
+          [ -d "remove-ai-watermarks" ] && [ "$(ls -A remove-ai-watermarks 2>/dev/null)" ] && cp -R remove-ai-watermarks release_pkg/ || true
+          [ -d "noai-watermark" ] && [ "$(ls -A noai-watermark 2>/dev/null)" ] && cp -R noai-watermark release_pkg/ || true
           cd release_pkg
           zip -r -y ../AI-Unmarker-Pro-macOS.zip .
           cd ..
 
-      # GitHub Releases 업로드
-      - name: Upload Release Asset
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-        with:
-          tag_name: v1.0.0
-          files: ${{ matrix.artifact_name }}
-          generate_release_notes: true
+      # GitHub 공식 CLI로 릴리즈 등록 (로컬 git을 호출하지 않아 exit code 128 발생 불가)
+      - name: Upload to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${GITHUB_REF_NAME}"
+          if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" = "main" ]; then
+            TAG_NAME="v1.0.0"
+          fi
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" --title "AI Unmarker Pro $TAG_NAME" --notes "AI Unmarker Pro $TAG_NAME 자동 배포 릴리즈"
+          fi
+          gh release upload "$TAG_NAME" "${{ matrix.artifact_name }}" --clobber
