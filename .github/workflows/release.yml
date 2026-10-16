@@ -25,8 +25,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -39,7 +37,7 @@ jobs:
           pip install pyinstaller customtkinter tkinterdnd2 Pillow
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
-      # Windows 빌드 (.exe)
+      # Windows 빌드 및 패키징 (xcopy 에러 수정)
       - name: Build for Windows
         if: runner.os == 'Windows'
         run: |
@@ -48,11 +46,11 @@ jobs:
           copy dist\AI-Unmarker-Pro.exe release_pkg\
           xcopy /E /I fonts release_pkg\fonts
           xcopy /E /I icons release_pkg\icons
-          if exist remove-ai-watermarks xcopy /E /I remove-ai-watermarks release_pkg\remove-ai-watermarks
-          if exist noai-watermark xcopy /E /I noai-watermark release_pkg\noai-watermark
+          if exist remove-ai-watermarks\inference.py xcopy /E /I remove-ai-watermarks release_pkg\remove-ai-watermarks
+          if exist noai-watermark\inference.py xcopy /E /I noai-watermark release_pkg\noai-watermark
           Compress-Archive -Path release_pkg\* -DestinationPath AI-Unmarker-Pro-Windows-x64.zip
 
-      # macOS 빌드 (.app)
+      # macOS 빌드 및 패키징 (cp 에러 수정)
       - name: Build for macOS
         if: runner.os == 'macOS'
         run: |
@@ -61,16 +59,17 @@ jobs:
           cp -R "dist/AI Unmarker Pro.app" release_pkg/
           cp -R fonts release_pkg/
           cp -R icons release_pkg/
-          [ -d "remove-ai-watermarks" ] && cp -R remove-ai-watermarks release_pkg/
-          [ -d "noai-watermark" ] && cp -R noai-watermark release_pkg/
+          if [ -d "remove-ai-watermarks" ] && [ "$(ls -A remove-ai-watermarks)" ]; then cp -R remove-ai-watermarks release_pkg/; fi
+          if [ -d "noai-watermark" ] && [ "$(ls -A noai-watermark)" ]; then cp -R noai-watermark release_pkg/; fi
           cd release_pkg
           zip -r -y ../AI-Unmarker-Pro-macOS.zip .
           cd ..
 
-      # GitHub Releases 업로드 (수동 실행 시에도 v1.0.0으로 자동 태깅)
+      # GitHub Releases 업로드
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
+          tag_name: v1.0.0
           files: ${{ matrix.artifact_name }}
           generate_release_notes: true

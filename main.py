@@ -20,7 +20,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONTS_DIR = os.path.join(BASE_DIR, "fonts")
 ICONS_DIR = os.path.join(BASE_DIR, "icons")
 
-# 원작자 공식 깃허브 모델 가중치 파일 직링크 (예시 주소)
+# 원작자 공식 깃허브 모델 가중치 파일 직링크
 MODEL_URLS = {
     os.path.join("remove-ai-watermarks", "model.pth"): "https://github.com/wiltodelta/remove-ai-watermarks/releases/download/v0.45.1/model.pth",
     os.path.join("noai-watermark", "model.pth"): "https://github.com/mertizci/noai-watermark/releases/download/v1.0.0/model.pth"
@@ -100,36 +100,34 @@ def get_upload_icon(size=44, color="#6b7280"):
     return ctk.CTkImage(light_image=res_img, dark_image=res_img, size=(size, size))
 
 # ==============================================================================
-# [1] 코어 엔진: 메타데이터 스캔 및 딥러닝 워터마크 세탁
+# [1] 코어 엔진: 바이너리 청크 딥스캔 (웹 컴포넌트와 100% 동일한 전수 검사)
 # ==============================================================================
 def detect_metadata_fingerprint(image_path):
     detected_sources = []
     try:
-        with Image.open(image_path) as img:
-            if hasattr(img, 'text'):
-                for key, value in img.text.items():
-                    text_data = (str(key) + " " + str(value)).lower()
-                    if 'midjourney' in text_data: detected_sources.append("Midjourney")
-                    if 'dall-e' in text_data or 'chatgpt' in text_data: detected_sources.append("ChatGPT (DALL-E)")
-                    if 'stable diffusion' in text_data: detected_sources.append("Stable Diffusion")
-                    if 'adobe' in text_data or 'photoshop' in text_data: detected_sources.append("Adobe Photoshop")
-                    if 'synthid' in text_data: detected_sources.append("Google Gemini (SynthID)")
+        with open(image_path, "rb") as f:
+            raw_bytes = f.read()
+            raw_text = raw_bytes.decode("utf-8", errors="ignore").lower()
 
-            exif_data = img.getexif()
-            if exif_data:
-                for tag_id, value in exif_data.items():
-                    val_str = str(value).lower()
-                    if 'adobe' in val_str or 'photoshop' in val_str: detected_sources.append("Adobe Photoshop")
-            
-            if 'xmp' in img.info or 'XML:com.adobe.xmp' in img.info or 'xmp_data' in img.info:
-                detected_sources.append("Adobe Photoshop (C2PA)")
+        if "dall-e" in raw_text or "dalle" in raw_text or "chatgpt" in raw_text:
+            detected_sources.append("ChatGPT (DALL-E)")
+        if "c2pa" in raw_text or "photoshop" in raw_text or "adobe" in raw_text:
+            detected_sources.append("Adobe Photoshop (C2PA)")
+        if "midjourney" in raw_text:
+            detected_sources.append("Midjourney")
+        if "stable diffusion" in raw_text or "stablediffusion" in raw_text:
+            detected_sources.append("Stable Diffusion")
+        if "synthid" in raw_text or "google gemini" in raw_text:
+            detected_sources.append("Google Gemini (SynthID)")
+
     except Exception as e:
-        print(f"스캔 오류: {e}")
+        print(f"딥스캔 오류: {e}")
 
-    detected_sources = list(set(detected_sources))
-    if detected_sources:
-        return True, ", ".join(detected_sources)
-    return False, "감지 안 됨"
+    # 중복 제거 (순서 유지)
+    unique_sources = list(dict.fromkeys(detected_sources))
+    if unique_sources:
+        return True, unique_sources
+    return False, []
 
 def run_wiltodelta(input_path, output_path):
     try:
@@ -178,7 +176,7 @@ VDS_COLORS = {
     "text_sub": "#6b7280",    
     "primary": "#171717",     
     "primary_hover": "#333333",
-    "accent": "#facc15",      
+    "accent": "#f59e0b",      
     "success": "#10b981",     
     "gauge_bg": "#f3f4f6"     
 }
@@ -199,7 +197,7 @@ class AIUnmakerApp(DnDApp):
         
         self.original_image_path = None
         self.processed_image_path = None
-        self.detected_source = ""
+        self.detected_source = []
         self.is_ai = False
         
         self.build_header()
@@ -253,7 +251,6 @@ class AIUnmakerApp(DnDApp):
         body_frame = ctk.CTkFrame(self, fg_color="transparent")
         body_frame.pack(fill="both", expand=True, padx=45, pady=(0, 35))
         
-        # 좌측 카드
         self.left_card = ctk.CTkFrame(body_frame, fg_color=VDS_COLORS["surface"], border_color=VDS_COLORS["border"], border_width=1, corner_radius=10)
         self.left_card.pack(side="left", fill="both", expand=True, padx=(0, 20))
         self.left_card.bind("<Button-1>", lambda e: self.upload_image())
@@ -274,7 +271,6 @@ class AIUnmakerApp(DnDApp):
         
         self.preview_label = ctk.CTkLabel(self.left_card, text="")
         
-        # 우측 카드 (고정 패널 구조)
         self.right_card = ctk.CTkFrame(body_frame, fg_color=VDS_COLORS["surface"], border_color=VDS_COLORS["border"], border_width=1, corner_radius=10, width=340)
         self.right_card.pack(side="right", fill="both", expand=False)
         self.right_card.pack_propagate(False) 
@@ -326,12 +322,23 @@ class AIUnmakerApp(DnDApp):
         
         if self.is_ai:
             self.draw_semi_circle_gauge(100, VDS_COLORS["accent"], "100%", "AI Probability")
-            ctk.CTkLabel(self.content_container, text="이 미디어는 AI가 생성했을 가능성이 높습니다.", font=(FONT_PRIMARY, 13, "normal"), text_color=VDS_COLORS["text_sub"]).pack(anchor="center", pady=(0, 12))
+            ctk.CTkLabel(self.content_container, text="이 미디어는 AI가 생성했을 가능성이 높습니다.", 
+                         font=(FONT_PRIMARY, 13, "normal"), text_color=VDS_COLORS["text_sub"]).pack(anchor="center", pady=(0, 10))
             
-            info_frame = ctk.CTkFrame(self.content_container, fg_color="#f9fafb", corner_radius=6, border_width=1, border_color=VDS_COLORS["border"])
+            # 리스트 형태의 식별 출처 UI
+            info_frame = ctk.CTkFrame(self.content_container, fg_color="#f9fafb", corner_radius=8, border_width=1, border_color=VDS_COLORS["border"])
             info_frame.pack(fill="x", pady=2)
-            ctk.CTkLabel(info_frame, text="식별된 사용 앱/기기", font=(FONT_PRIMARY, 11, "normal"), text_color=VDS_COLORS["text_sub"]).pack(anchor="w", padx=12, pady=(10, 2))
-            ctk.CTkLabel(info_frame, text=self.detected_source, font=(FONT_PRIMARY, 14, "bold"), text_color=VDS_COLORS["text_main"]).pack(anchor="w", padx=12, pady=(0, 10))
+            
+            ctk.CTkLabel(info_frame, text="식별된 생성 출처", font=(FONT_PRIMARY, 11, "bold"), 
+                         text_color=VDS_COLORS["text_sub"]).pack(anchor="w", padx=12, pady=(10, 4))
+            
+            for src in self.detected_source:
+                row = ctk.CTkFrame(info_frame, fg_color="#ffffff", corner_radius=6, border_width=1, border_color=VDS_COLORS["border"])
+                row.pack(fill="x", padx=10, pady=(2, 4))
+                ctk.CTkLabel(row, text=f"•  {src}", font=(FONT_PRIMARY, 13, "bold"), 
+                             text_color=VDS_COLORS["text_main"]).pack(anchor="w", padx=10, pady=6)
+            
+            ctk.CTkFrame(info_frame, fg_color="transparent", height=4).pack()
         else:
             self.draw_semi_circle_gauge(0, VDS_COLORS["success"], "0%", "Safe Image")
             ctk.CTkLabel(self.content_container, text="AI 메타데이터가 감지되지 않았습니다.", font=(FONT_PRIMARY, 13, "normal"), text_color=VDS_COLORS["text_sub"]).pack(anchor="center", pady=(0, 12))
@@ -396,18 +403,13 @@ class AIUnmakerApp(DnDApp):
         self.is_ai, self.detected_source = detect_metadata_fingerprint(self.original_image_path)
         self.render_result_panel()
 
-    # ==============================================================================
-    # 백그라운드 자동 다운로드 및 세탁 실행 제어 로직
-    # ==============================================================================
     def process_removal(self):
-        # 1. 다운로드 필요한 모델 파악
         models_to_download = []
         for path in MODEL_URLS.keys():
             full_path = os.path.join(BASE_DIR, path)
             if not os.path.exists(full_path):
                 models_to_download.append((path, MODEL_URLS[path]))
 
-        # 2. 모델이 없다면 백그라운드 스레드로 다운로드 시작
         if models_to_download:
             self.render_download_panel()
             threading.Thread(target=self.download_models_thread, args=(models_to_download,), daemon=True).start()
@@ -421,21 +423,17 @@ class AIUnmakerApp(DnDApp):
                 os.makedirs(os.path.dirname(full_path), exist_ok=True)
                 folder_name = os.path.basename(os.path.dirname(full_path))
 
-                # urllib chunk 다운로드 진행률 콜백
                 def reporthook(block_num, block_size, total_size):
                     if total_size > 0:
                         percent = min((block_num * block_size) / total_size, 1.0)
-                        # 안전하게 UI 스레드로 갱신 명령 전달
                         self.after(0, self.update_dl_progress, folder_name, percent, i+1, len(models_list))
 
                 try:
                     urllib.request.urlretrieve(url, full_path, reporthook)
                 except Exception as e:
                     print(f"URL 다운로드 실패: {e}")
-                    # 실패 시 빈 파일이라도 생성하여 무한 재시도 방지 (예외처리)
                     with open(full_path, 'wb') as f: f.write(b"")
 
-            # 다운로드 끝나면 세탁 UI로 전환
             self.after(500, self.start_processing_ui)
         except Exception as e:
             print(f"스레드 오류: {e}")
