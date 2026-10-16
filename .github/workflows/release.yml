@@ -36,7 +36,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller customtkinter tkinterdnd2 Pillow
+          pip install pyinstaller customtkinter tkinterdnd2 Pillow numpy
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
       # Windows 빌드 (.exe)
@@ -46,7 +46,7 @@ jobs:
           pyinstaller --noconfirm --noconsole --onefile --icon=icons/icon.ico --name "AI-Unmarker-Pro" --collect-all customtkinter --collect-all tkinterdnd2 main.py
           python -c "import os, shutil; os.makedirs('release_pkg', exist_ok=True); shutil.copy('dist/AI-Unmarker-Pro.exe', 'release_pkg/') if os.path.exists('dist/AI-Unmarker-Pro.exe') else None; [shutil.copytree(f, os.path.join('release_pkg', f), dirs_exist_ok=True) for f in ['fonts', 'icons', 'remove-ai-watermarks', 'noai-watermark'] if os.path.isdir(f) and os.listdir(f)]; shutil.make_archive('AI-Unmarker-Pro-Windows-x64', 'zip', 'release_pkg')"
 
-      # macOS 빌드 (.app) - .icns 자동 생성 및 아이콘 적용
+      # macOS 빌드 (.app) - .icns 생성 및 패키징
       - name: Build for macOS
         if: runner.os == 'macOS'
         run: |
@@ -62,7 +62,6 @@ jobs:
           zip -r -y ../AI-Unmarker-Pro-macOS.zip .
           cd ..
 
-      # 빌드된 압축 파일 아티팩트로 보관
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -87,11 +86,11 @@ jobs:
         run: |
           TAG_NAME="${GITHUB_REF_NAME}"
           if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" = "main" ]; then
-            TAG_NAME="v1.0.0"
+            TAG_NAME="v1.0.2"
           fi
           
           if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release create "$TAG_NAME" release_assets/*.zip --title "AI Unmarker Pro $TAG_NAME" --notes "Windows (.exe) 및 macOS (.app) 정식 빌드 배포"
+            gh release create "$TAG_NAME" release_assets/*.zip --title "AI Unmarker Pro $TAG_NAME" --notes "Windows (.exe) 및 macOS (.app) 비가시적 워터마크 파괴 버전 배포"
           else
             gh release upload "$TAG_NAME" release_assets/*.zip --clobber
           fi
