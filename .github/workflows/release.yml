@@ -40,14 +40,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller customtkinter tkinterdnd2 Pillow numpy
 
-      # Windows 빌드 (.exe)
+      # Windows 빌드 (.exe) - 30MB대 단일 실행 파일 생성
       - name: Build for Windows
         if: runner.os == 'Windows'
         run: |
           pyinstaller --noconfirm --noconsole --onefile --icon=icons/icon.ico --name "AI-Unmarker-Pro" --add-data "fonts;fonts" --add-data "icons;icons" --collect-all customtkinter --collect-all tkinterdnd2 main.py
           python -c "import os, shutil; os.makedirs('release_pkg', exist_ok=True); shutil.copy('dist/AI-Unmarker-Pro.exe', 'release_pkg/'); [shutil.copytree(f, os.path.join('release_pkg', f), dirs_exist_ok=True) for f in ['fonts', 'icons'] if os.path.isdir(f)]; shutil.make_archive('AI-Unmarker-Pro-Windows-x64', 'zip', 'release_pkg')"
 
-      # macOS 빌드 (.app) - 단일 라인 명령어로 Bash 파싱 에러 방지
+      # macOS 빌드 (.app) - 단일 라인 무인 실행
       - name: Build for macOS
         if: runner.os == 'macOS'
         run: |
@@ -89,7 +89,7 @@ jobs:
           fi
           
           if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release create "$TAG_NAME" release_assets/*.zip --title "AI Unmarker Pro $TAG_NAME" --notes "Windows 및 macOS 30MB 초경량 정식 배포 ($TAG_NAME)"
+            gh release create "$TAG_NAME" release_assets/*.zip --title "AI Unmarker Pro $TAG_NAME" --notes "Windows 및 macOS 30MB 초경량 자동 배포 ($TAG_NAME)"
           else
             gh release upload "$TAG_NAME" release_assets/*.zip --clobber
           fi
