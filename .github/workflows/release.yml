@@ -82,15 +82,15 @@ jobs:
       - name: Create Release and Upload Assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           TAG_NAME="${GITHUB_REF_NAME}"
           if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" = "main" ]; then
             TAG_NAME="v1.0.0"
           fi
           
-          # 릴리즈가 없으면 생성하고, 이미 태그만 존재하면 파일들을 업로드
           if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release create "$TAG_NAME" release_assets/* --title "AI Unmarker Pro $TAG_NAME" --notes "Windows (.exe) 및 macOS (.app) 정식 빌드 배포"
+            gh release create "$TAG_NAME" release_assets/*.zip --title "AI Unmarker Pro $TAG_NAME" --notes "Windows (.exe) 및 macOS (.app) 정식 빌드 배포"
           else
-            gh release upload "$TAG_NAME" release_assets/* --clobber
+            gh release upload "$TAG_NAME" release_assets/*.zip --clobber
           fi
