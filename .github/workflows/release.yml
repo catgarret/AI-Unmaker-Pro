@@ -25,6 +25,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -37,7 +39,7 @@ jobs:
           pip install pyinstaller customtkinter tkinterdnd2 Pillow
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
-      # Windows 빌드 및 패키징
+      # Windows 빌드 (.exe)
       - name: Build for Windows
         if: runner.os == 'Windows'
         run: |
@@ -50,7 +52,7 @@ jobs:
           if exist noai-watermark xcopy /E /I noai-watermark release_pkg\noai-watermark
           Compress-Archive -Path release_pkg\* -DestinationPath AI-Unmarker-Pro-Windows-x64.zip
 
-      # macOS 빌드 및 패키징
+      # macOS 빌드 (.app)
       - name: Build for macOS
         if: runner.os == 'macOS'
         run: |
@@ -65,10 +67,10 @@ jobs:
           zip -r -y ../AI-Unmarker-Pro-macOS.zip .
           cd ..
 
-      # GitHub Releases 업로드
+      # GitHub Releases 업로드 (수동 실행 시에도 v1.0.0으로 자동 태깅)
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
           files: ${{ matrix.artifact_name }}
           generate_release_notes: true
