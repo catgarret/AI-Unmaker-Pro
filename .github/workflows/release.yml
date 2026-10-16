@@ -46,11 +46,12 @@ jobs:
           pyinstaller --noconfirm --noconsole --onefile --icon=icons/icon.ico --name "AI-Unmarker-Pro" --collect-all customtkinter --collect-all tkinterdnd2 main.py
           python -c "import os, shutil; os.makedirs('release_pkg', exist_ok=True); shutil.copy('dist/AI-Unmarker-Pro.exe', 'release_pkg/') if os.path.exists('dist/AI-Unmarker-Pro.exe') else None; [shutil.copytree(f, os.path.join('release_pkg', f), dirs_exist_ok=True) for f in ['fonts', 'icons', 'remove-ai-watermarks', 'noai-watermark'] if os.path.isdir(f) and os.listdir(f)]; shutil.make_archive('AI-Unmarker-Pro-Windows-x64', 'zip', 'release_pkg')"
 
-      # macOS 빌드 (.app)
+      # macOS 빌드 (.app) - .icns 자동 생성 및 아이콘 적용
       - name: Build for macOS
         if: runner.os == 'macOS'
         run: |
-          pyinstaller --noconfirm --noconsole --windowed --name "AI Unmarker Pro" --collect-all customtkinter --collect-all tkinterdnd2 main.py
+          python -c "from PIL import Image; Image.open('icons/icon.png').save('icons/icon.icns', format='ICNS')"
+          pyinstaller --noconfirm --noconsole --windowed --icon=icons/icon.icns --name "AI Unmarker Pro" --collect-all customtkinter --collect-all tkinterdnd2 main.py
           mkdir release_pkg
           cp -R "dist/AI Unmarker Pro.app" release_pkg/
           [ -d "fonts" ] && cp -R fonts release_pkg/
