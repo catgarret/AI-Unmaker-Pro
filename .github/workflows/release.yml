@@ -18,9 +18,11 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact_name: AI-Unmarker-Pro-Windows-x64.zip
+            artifact_name: AI-Unmarker-Pro-Windows-x64
+            zip_file: AI-Unmarker-Pro-Windows-x64.zip
           - os: macos-latest
-            artifact_name: AI-Unmarker-Pro-macOS.zip
+            artifact_name: AI-Unmarker-Pro-macOS
+            zip_file: AI-Unmarker-Pro-macOS.zip
 
     steps:
       - name: Checkout repository
@@ -37,18 +39,18 @@ jobs:
           pip install pyinstaller customtkinter tkinterdnd2 Pillow
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
-      # Windows 빌드 및 패키징 (파이썬 내장 모듈로 OS 문법 충돌 차단)
+      # Windows 빌드 (.exe)
       - name: Build for Windows
         if: runner.os == 'Windows'
         run: |
           pyinstaller --noconfirm --noconsole --onefile --icon=icons/icon.ico --name "AI-Unmarker-Pro" --collect-all customtkinter --collect-all tkinterdnd2 main.py
           python -c "import os, shutil; os.makedirs('release_pkg', exist_ok=True); shutil.copy('dist/AI-Unmarker-Pro.exe', 'release_pkg/') if os.path.exists('dist/AI-Unmarker-Pro.exe') else None; [shutil.copytree(f, os.path.join('release_pkg', f), dirs_exist_ok=True) for f in ['fonts', 'icons', 'remove-ai-watermarks', 'noai-watermark'] if os.path.isdir(f) and os.listdir(f)]; shutil.make_archive('AI-Unmarker-Pro-Windows-x64', 'zip', 'release_pkg')"
 
-      # macOS 빌드 및 패키징
+      # macOS 빌드 (.app)
       - name: Build for macOS
         if: runner.os == 'macOS'
         run: |
-          pyinstaller --noconfirm --noconsole --windowed --icon=icons/icon.png --name "AI Unmarker Pro" --collect-all customtkinter --collect-all tkinterdnd2 main.py
+          pyinstaller --noconfirm --noconsole --windowed --name "AI Unmarker Pro" --collect-all customtkinter --collect-all tkinterdnd2 main.py
           mkdir release_pkg
           cp -R "dist/AI Unmarker Pro.app" release_pkg/
           [ -d "fonts" ] && cp -R fonts release_pkg/
@@ -59,9 +61,25 @@ jobs:
           zip -r -y ../AI-Unmarker-Pro-macOS.zip .
           cd ..
 
-      # GitHub 공식 CLI로 릴리즈 등록 (로컬 git을 호출하지 않아 exit code 128 발생 불가)
-      - name: Upload to GitHub Release
-        shell: bash
+      # 빌드된 압축 파일 아티팩트로 보관
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.zip_file }}
+
+  release:
+    name: Publish Release Assets
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: release_assets
+
+      - name: Create Release and Upload Assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -69,7 +87,10 @@ jobs:
           if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" = "main" ]; then
             TAG_NAME="v1.0.0"
           fi
+          
+          # 릴리즈가 없으면 생성하고, 이미 태그만 존재하면 파일들을 업로드
           if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release create "$TAG_NAME" --title "AI Unmarker Pro $TAG_NAME" --notes "AI Unmarker Pro $TAG_NAME 자동 배포 릴리즈"
+            gh release create "$TAG_NAME" release_assets/* --title "AI Unmarker Pro $TAG_NAME" --notes "Windows (.exe) 및 macOS (.app) 정식 빌드 배포"
+          else
+            gh release upload "$TAG_NAME" release_assets/* --clobber
           fi
-          gh release upload "$TAG_NAME" "${{ matrix.artifact_name }}" --clobber
