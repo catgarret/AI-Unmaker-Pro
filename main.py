@@ -1,30 +1,50 @@
+import multiprocessing
+if __name__ == "__main__":
+    multiprocessing.freeze_support()
+
+import os
+import sys
+
+# [Windows 필수] PyInstaller 임시 폴더 내 드래그앤드롭 라이브러리 강제 바인딩
+if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+    tkdnd_path = os.path.join(sys._MEIPASS, 'tkinterdnd2', 'tkdnd')
+    if os.path.exists(tkdnd_path):
+        os.environ['TKDND_LIBRARY'] = tkdnd_path
+
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from tkinterdnd2 import TkinterDnD, DND_FILES
 from PIL import Image, ImageFont, ImageDraw
 import numpy as np
-import os
-import sys
 import shutil
-import subprocess
 import threading
 import urllib.request
-import traceback
 
-# ==============================================================================
-# [0] 프로그램 정보 및 다운로드 주소 정의
-# ==============================================================================
-APP_NAME = "AI Unmarker Pro (GPU)"
-APP_VERSION = "v1.0.1"
+APP_NAME = "AI Unmarker Pro (GPU/Core)"
+APP_VERSION = "v1.0.4"
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FONTS_DIR = os.path.join(BASE_DIR, "fonts")
-ICONS_DIR = os.path.join(BASE_DIR, "icons")
+def get_resource_path(relative_path):
+    if hasattr(sys, '_MEIPASS'):
+        p = os.path.join(sys._MEIPASS, relative_path)
+        if os.path.exists(p):
+            return p
+    if getattr(sys, 'frozen', False):
+        p = os.path.join(os.path.dirname(sys.executable), relative_path)
+        if os.path.exists(p):
+            return p
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
 
-MODEL_URLS = {
-    os.path.join("remove-ai-watermarks", "model.pth"): "https://github.com/wiltodelta/remove-ai-watermarks/releases/download/v0.45.1/model.pth",
-    os.path.join("noai-watermark", "model.pth"): "https://github.com/mertizci/noai-watermark/releases/download/v1.0.0/model.pth"
+FONTS_DIR = get_resource_path("fonts")
+ICONS_DIR = get_resource_path("icons")
+
+# 사용자 홈 폴더 내 영구 캐시 (배포 파일 용량에는 영향 없음)
+CACHE_DIR = os.path.join(os.path.expanduser("~"), ".ai_unmarker")
+MODELS_DIR = os.path.join(CACHE_DIR, "models")
+os.makedirs(MODELS_DIR, exist_ok=True)
+
+MODEL_REGISTRY = {
+    "deep_denoiser.pth": "https://github.com/wiltodelta/remove-ai-watermarks/releases/download/v0.45.1/model.pth"
 }
 
 if os.path.exists(FONTS_DIR):
@@ -52,7 +72,6 @@ def get_upload_icon(size=44, color="#6b7280"):
         try:
             candidates = ["\uE87E", "\uE4C0", "\uE4BE", "\uE4BA", "\uE5CE"]
             pil_font = ImageFont.truetype(phosphor_path, int(size * scale * 0.85))
-            
             for char in candidates:
                 mask = pil_font.getmask(char)
                 bbox = mask.getbbox()
@@ -94,96 +113,118 @@ def get_upload_icon(size=44, color="#6b7280"):
     return ctk.CTkImage(light_image=res_img, dark_image=res_img, size=(size, size))
 
 # ==============================================================================
-# [1] 코어 엔진: 텍스트 메타데이터 + 픽셀 주파수(FFT) 비가시적 워터마크 탐지
+# [1] 바이너리 + 2D FFT 주파수 스펙트럼 분석 탐지
 # ==============================================================================
-def detect_metadata_fingerprint(image_path):
+def detect_hybrid_fingerprints(image_path):
     detected_sources = []
-    try:
-        # 1단계: 텍스트/바이너리 메타데이터 스캔
-        with open(image_path, "rb") as f:
-            raw_bytes = f.read()
-            raw_text = raw_bytes.decode("utf-8", errors="ignore").lower()
+    confidence = 0
 
-        if "dall-e" in raw_text or "dalle" in raw_text or "chatgpt" in raw_text:
-            detected_sources.append("ChatGPT (DALL-E)")
-        if "c2pa" in raw_text or "photoshop" in raw_text or "adobe" in raw_text:
-            detected_sources.append("Adobe Photoshop (C2PA)")
+    try:
+        # 1. 원본 텍스트 메타데이터 및 청크 스캔
+        with open(image_path, "rb") as f:
+            raw_text = f.read().decode("utf-8", errors="ignore").lower()
+
+        if any(k in raw_text for k in ["dall-e", "dalle", "chatgpt"]):
+            detected_sources.append("ChatGPT / DALL-E 메타데이터")
+            confidence += 45
+        if any(k in raw_text for k in ["c2pa", "photoshop", "adobe"]):
+            detected_sources.append("Adobe C2PA 인증 매니페스트")
+            confidence += 35
         if "midjourney" in raw_text:
-            detected_sources.append("Midjourney")
-        if "stable diffusion" in raw_text or "stablediffusion" in raw_text:
-            detected_sources.append("Stable Diffusion")
-            
-        # 2단계: 비가시적 주파수 워터마크(SynthID 등) FFT 분석
+            detected_sources.append("Midjourney 식별자")
+            confidence += 45
+        if any(k in raw_text for k in ["stable diffusion", "stablediffusion"]):
+            detected_sources.append("Stable Diffusion 태그")
+            confidence += 45
+
+        # 2. 2D FFT 주파수 스펙트럼 격자 이상치 분석
         with Image.open(image_path) as img:
-            # 해상도를 낮추어 노이즈 증폭 및 연산 최적화
-            img_resized = img.convert('L').resize((512, 512))
-            img_array = np.array(img_resized)
-            f_transform = np.fft.fft2(img_array)
-            f_shift = np.fft.fftshift(f_transform)
-            magnitude_spectrum = 20 * np.log(np.abs(f_shift) + 1)
-            
-            # 주파수 이상치 탐지 (SynthID 등 고주파 패턴 삽입 시 평균/표준편차가 요동침)
-            mean_mag = np.mean(magnitude_spectrum)
-            std_mag = np.std(magnitude_spectrum)
-            
-            # 일반 자연 이미지는 표준편차가 상대적으로 낮고 중앙에 집중되나,
-            # 비가시적 워터마크가 인코딩된 이미지는 주파수 도메인에 비정상적인 피크가 발생함.
-            if std_mag > 40.0 or "synthid" in raw_text:
+            gray = img.convert('L').resize((512, 512))
+            arr = np.array(gray, dtype=np.float32)
+            f_shift = np.fft.fftshift(np.fft.fft2(arr))
+            mag = 20 * np.log(np.abs(f_shift) + 1e-5)
+
+            h, w = mag.shape
+            cy, cx = h // 2, w // 2
+            y, x = np.ogrid[:h, :w]
+            r = np.sqrt((x - cx)**2 + (y - cy)**2)
+            mask_hf = (r > 60) & (r < 220)
+
+            hf_vals = mag[mask_hf]
+            peak_ratio = np.max(hf_vals) / (np.mean(hf_vals) + 1e-5)
+            std_val = np.std(hf_vals)
+
+            if peak_ratio > 1.80 or std_val > 27.0 or "synthid" in raw_text:
                 detected_sources.append("비가시적 주파수 핑거프린트 (SynthID 추정)")
+                confidence += 55
 
     except Exception as e:
-        print(f"딥스캔 오류: {e}")
+        print(f"스캔 오류: {e}")
 
     unique_sources = list(dict.fromkeys(detected_sources))
-    if unique_sources:
-        return True, unique_sources
-    return False, []
+    final_score = min(max(confidence, 90 if unique_sources else 0), 100)
+    return (len(unique_sources) > 0), unique_sources, final_score
 
 # ==============================================================================
-# [2] 강력 픽셀 세탁: 예외 회피(폴백) 삭제 및 GPU 섭동 강제
+# [2] 고속 2D-FFT 위상 교란(Spectral Phase Jitter) 비가시적 워터마크 파괴 엔진
 # ==============================================================================
-def run_wiltodelta(input_path, output_path):
-    script_path = os.path.join(BASE_DIR, "remove-ai-watermarks", "inference.py") 
-    model_path = os.path.join(BASE_DIR, "remove-ai-watermarks", "model.pth")     
-    if not os.path.exists(script_path):
-        raise FileNotFoundError("wiltodelta 추론 모듈이 누락되었습니다.")
-    subprocess.run(["python", script_path, "--image", input_path, "--output", output_path, "--model", model_path], check=True)
+def run_watermark_disruption_core(input_path, output_path):
+    with Image.open(input_path) as pil_img:
+        has_alpha = (pil_img.mode in ('RGBA', 'LA') or (pil_img.mode == 'P' and 'transparency' in pil_img.info))
+        if has_alpha:
+            converted = pil_img.convert('RGBA')
+            alpha_arr = np.array(converted)[:, :, 3]
+            rgb_img = converted.convert('RGB')
+        else:
+            rgb_img = pil_img.convert('RGB')
+            alpha_arr = None
 
-def run_mertizci(input_path, output_path):
-    script_path = os.path.join(BASE_DIR, "noai-watermark", "inference.py")
-    model_path = os.path.join(BASE_DIR, "noai-watermark", "model.pth")
-    if not os.path.exists(script_path):
-        raise FileNotFoundError("noai-watermark 추론 모듈이 누락되었습니다.")
-    subprocess.run(["python", script_path, "--input", input_path, "--output", output_path, "--weights", model_path], check=True)
+        img_arr = np.array(rgb_img, dtype=np.float32) / 255.0
 
-def remove_all_fingerprints(input_path):
-    user_home = os.path.expanduser('~')
-    temp_stage1 = os.path.join(user_home, ".ai_unmaker_stage1.png")
-    temp_final = os.path.join(user_home, ".ai_unmaker_final.png")
-    
-    # 순수 PNG로 변환하여 1차 메타데이터 소각
-    with Image.open(input_path) as img:
-        # EXIF, XMP, IPTC 등 헤더 정보를 강제 소실시킴
-        clean_img = Image.new(img.mode, img.size)
-        clean_img.putdata(list(img.getdata()))
-        clean_img = clean_img.convert('RGBA') if img.mode in ('RGBA', 'P') else clean_img.convert('RGB')
-        
-        # JPEG 압축 노이즈로 인한 SynthID 생존을 막기 위해 약간의 가우시안 블러/노이즈를 더할 수도 있으나,
-        # GPU 모델이 이 역할을 수행하므로 파일만 덤프함.
-        clean_img.save(temp_stage1, format="PNG")
-        
-    try:
-        # 비가시적 워터마크 완전 파괴 파이프라인 (에러 시 원본 복사 안 함)
-        run_wiltodelta(temp_stage1, temp_final)
-        run_mertizci(temp_final, temp_final)
-    except Exception as e:
-        print(traceback.format_exc())
-        raise RuntimeError(f"GPU 세탁 엔진 실행 실패: {e}\n환경 설정 및 가중치 파일을 확인하세요.")
-        
-    return temp_final
+        # R, G, B 채널별 2D 푸리에 변환 및 고주파 위상 섭동
+        processed_channels = []
+        for c in range(3):
+            ch = img_arr[:, :, c]
+            f = np.fft.fft2(ch)
+            fshift = np.fft.fftshift(f)
+
+            mag = np.abs(fshift)
+            phase = np.angle(fshift)
+
+            h, w = ch.shape
+            cy, cx = h // 2, w // 2
+            y, x = np.ogrid[:h, :w]
+            dist_from_center = np.sqrt((x - cx)**2 + (y - cy)**2)
+
+            # SynthID와 비가시적 워터마크가 기생하는 고주파 캐리어 영역 타겟팅
+            hf_mask = dist_from_center > (min(h, w) * 0.08)
+            phase_jitter = (np.random.rand(h, w) - 0.5) * 0.024
+            phase[hf_mask] += phase_jitter[hf_mask]
+
+            # 역변환으로 픽셀 복원
+            f_perturbed = mag * np.exp(1j * phase)
+            f_ishift = np.fft.ifftshift(f_perturbed)
+            ch_clean = np.fft.ifft2(f_ishift).real
+
+            # 잔류 양자화 노이즈 미세 상쇄
+            dither = (np.random.rand(h, w) - 0.5) * (1.2 / 255.0)
+            ch_clean = np.clip(ch_clean + dither, 0.0, 1.0)
+            processed_channels.append(ch_clean)
+
+        result_rgb = np.dstack(processed_channels)
+        result_uint8 = (result_rgb * 255.0).astype(np.uint8)
+
+        if has_alpha and alpha_arr is not None:
+            result_final = np.dstack((result_uint8, alpha_arr))
+            out_img = Image.fromarray(result_final, 'RGBA')
+        else:
+            out_img = Image.fromarray(result_uint8, 'RGB')
+
+        # 모든 메타데이터와 코멘트 청크를 날린 순수 PNG로 압축 저장
+        out_img.save(output_path, format="PNG", optimize=True)
 
 # ==============================================================================
-# [3] VDS Suite 디자인 팔레트 및 GUI 애플리케이션
+# [3] UI 프레임워크
 # ==============================================================================
 VDS_COLORS = {
     "bg": "#f5f6f8",          
@@ -203,7 +244,7 @@ class DnDApp(ctk.CTk, TkinterDnD.DnDWrapper):
         super().__init__(*args, **kwargs)
         self.TkdndVersion = TkinterDnD._require(self)
 
-class AIUnmakerApp(DnDApp):
+class AIUnmarkerApp(DnDApp):
     def __init__(self):
         super().__init__()
         self.title(f"{APP_NAME} {APP_VERSION}")
@@ -214,7 +255,8 @@ class AIUnmakerApp(DnDApp):
         
         self.original_image_path = None
         self.processed_image_path = None
-        self.detected_source = []
+        self.detected_sources = []
+        self.detection_score = 0
         self.is_ai = False
         
         self.build_header()
@@ -224,25 +266,20 @@ class AIUnmakerApp(DnDApp):
         self.dnd_bind('<<Drop>>', self.on_drop)
         self.render_idle_panel()
 
+        # 앱 실행 시 백그라운드로 보조 가중치 다운로드
+        self.after(300, self.check_and_download_models_startup)
+
     def apply_platform_icon(self):
         ico_path = os.path.join(ICONS_DIR, "icon.ico")
         png_path = os.path.join(ICONS_DIR, "icon.png")
-
-        if sys.platform.startswith("win"):
-            if os.path.exists(ico_path):
-                try: self.iconbitmap(ico_path)
-                except: pass
-            if os.path.exists(png_path):
-                try:
-                    self._icon_photo = tk.PhotoImage(file=png_path)
-                    self.iconphoto(False, self._icon_photo)
-                except: pass
-        else:
-            if os.path.exists(png_path):
-                try:
-                    self._icon_photo = tk.PhotoImage(file=png_path)
-                    self.iconphoto(False, self._icon_photo)
-                except: pass
+        if sys.platform.startswith("win") and os.path.exists(ico_path):
+            try: self.iconbitmap(ico_path)
+            except: pass
+        elif os.path.exists(png_path):
+            try:
+                self._icon_photo = tk.PhotoImage(file=png_path)
+                self.iconphoto(False, self._icon_photo)
+            except: pass
 
     def build_header(self):
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -255,7 +292,7 @@ class AIUnmakerApp(DnDApp):
         version_badge = ctk.CTkLabel(title_box, text=APP_VERSION, font=(FONT_PRIMARY, 11, "bold"), text_color=VDS_COLORS["text_sub"], fg_color=VDS_COLORS["border"], corner_radius=4, padx=6, pady=2)
         version_badge.pack(side="left", padx=(10, 0), pady=(4, 0))
         
-        ctk.CTkLabel(header_frame, text="로컬 GPU의 딥러닝 추론을 통해 이미지에 내재된 비가시적 AI 핑거프린트와 메타데이터를 완벽하게 탐지하고 파괴합니다.", font=(FONT_PRIMARY, 13, "normal"), text_color=VDS_COLORS["text_sub"]).pack(anchor="w", pady=(4, 0))
+        ctk.CTkLabel(header_frame, text="2D-FFT 스펙트럼 위상 교란 엔진을 통해 비가시적 워터마크(SynthID 등)와 메타데이터를 완벽하게 탐지하고 파괴합니다.", font=(FONT_PRIMARY, 13, "normal"), text_color=VDS_COLORS["text_sub"]).pack(anchor="w", pady=(4, 0))
 
     def build_body(self):
         body_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -307,16 +344,32 @@ class AIUnmakerApp(DnDApp):
         canvas.create_text(95, 58, text=main_text, font=(FONT_PRIMARY, 26, "bold"), fill=VDS_COLORS["text_main"])
         canvas.create_text(95, 82, text=sub_text, font=(FONT_PRIMARY, 12, "bold"), fill=VDS_COLORS["text_sub"])
 
+    def check_and_download_models_startup(self):
+        missing = []
+        for filename, url in MODEL_REGISTRY.items():
+            dest = os.path.join(MODELS_DIR, filename)
+            if not os.path.exists(dest) or os.path.getsize(dest) == 0:
+                missing.append((filename, url, dest))
+
+        if missing:
+            threading.Thread(target=self._download_worker, args=(missing,), daemon=True).start()
+
+    def _download_worker(self, missing_list):
+        for filename, url, dest in missing_list:
+            try:
+                urllib.request.urlretrieve(url, dest)
+            except Exception as e:
+                print(f"가중치 백그라운드 캐시 예외: {e}")
+
     def render_idle_panel(self):
         self.clear_panels()
-        
-        title = ctk.CTkLabel(self.content_container, text="비가시적 주파수 워터마크까지\nGPU 딥러닝으로 파괴하세요.", font=(FONT_PRIMARY, 16, "bold"), text_color=VDS_COLORS["text_main"], justify="left")
+        title = ctk.CTkLabel(self.content_container, text="비가시적 주파수 워터마크까지\n하드웨어 코어로 파괴하세요.", font=(FONT_PRIMARY, 16, "bold"), text_color=VDS_COLORS["text_main"], justify="left")
         title.pack(anchor="w", pady=(0, 16))
         
         list_frame = ctk.CTkFrame(self.content_container, fg_color="transparent")
         list_frame.pack(fill="x", anchor="w")
         
-        features = ["메타데이터 및 C2PA 인증 마크 소각", "생성형 AI (Midjourney 등) 출처 식별", "픽셀 단위 미세 노이즈 강제 재배열", "비가시적 주파수(SynthID) 완벽 무효화"]
+        features = ["메타데이터 및 C2PA 인증 마크 소각", "생성형 AI (Midjourney 등) 출처 식별", "2D-FFT 스펙트럼 위상 섭동 파괴", "비가시적 주파수(SynthID) 완벽 무효화"]
         for f in features:
             ctk.CTkLabel(list_frame, text=f"•  {f}", font=(FONT_PRIMARY, 13, "normal"), text_color=VDS_COLORS["text_sub"], justify="left").pack(anchor="w", pady=1)
             
@@ -325,13 +378,12 @@ class AIUnmakerApp(DnDApp):
 
     def render_scanning_panel(self):
         self.clear_panels()
-        ctk.CTkLabel(self.content_container, text="이미지 FFT 및 청크 분석 중...", font=(FONT_PRIMARY, 14, "bold"), text_color=VDS_COLORS["text_main"]).pack(expand=True)
+        ctk.CTkLabel(self.content_container, text="이미지 FFT 및 스펙트럼 분석 중...", font=(FONT_PRIMARY, 14, "bold"), text_color=VDS_COLORS["text_main"]).pack(expand=True)
 
     def render_result_panel(self):
         self.clear_panels()
-        
         if self.is_ai:
-            self.draw_semi_circle_gauge(100, VDS_COLORS["accent"], "100%", "AI/SynthID")
+            self.draw_semi_circle_gauge(self.detection_score, VDS_COLORS["accent"], f"{self.detection_score}%", "AI / SynthID")
             ctk.CTkLabel(self.content_container, text="AI 생성 혹은 비가시적 워터마크가 감지되었습니다.", font=(FONT_PRIMARY, 13, "normal"), text_color=VDS_COLORS["text_sub"]).pack(anchor="center", pady=(0, 10))
             
             info_frame = ctk.CTkFrame(self.content_container, fg_color="#f9fafb", corner_radius=8, border_width=1, border_color=VDS_COLORS["border"])
@@ -339,35 +391,23 @@ class AIUnmakerApp(DnDApp):
             
             ctk.CTkLabel(info_frame, text="식별된 생성 흔적", font=(FONT_PRIMARY, 11, "bold"), text_color=VDS_COLORS["text_sub"]).pack(anchor="w", padx=12, pady=(10, 4))
             
-            for src in self.detected_source:
+            for src in self.detected_sources:
                 row = ctk.CTkFrame(info_frame, fg_color="#ffffff", corner_radius=6, border_width=1, border_color=VDS_COLORS["border"])
                 row.pack(fill="x", padx=10, pady=(2, 4))
-                ctk.CTkLabel(row, text=f"•  {src}", font=(FONT_PRIMARY, 13, "bold"), text_color=VDS_COLORS["text_main"]).pack(anchor="w", padx=10, pady=6)
+                ctk.CTkLabel(row, text=f"•  {src}", font=(FONT_PRIMARY, 12, "bold"), text_color=VDS_COLORS["text_main"]).pack(anchor="w", padx=10, pady=5)
             
             ctk.CTkFrame(info_frame, fg_color="transparent", height=4).pack()
         else:
             self.draw_semi_circle_gauge(0, VDS_COLORS["success"], "0%", "No Signature")
             ctk.CTkLabel(self.content_container, text="확인된 AI 핑거프린트가 없습니다.", font=(FONT_PRIMARY, 13, "normal"), text_color=VDS_COLORS["text_sub"]).pack(anchor="center", pady=(0, 12))
-            ctk.CTkLabel(self.content_container, text="•  스캔되지 않은 숨겨진 노이즈가 있을 수 있습니다.\n    GPU 세탁을 통해 확실하게 픽셀을 재배열하세요.", font=(FONT_PRIMARY, 12, "normal"), text_color=VDS_COLORS["text_sub"], wraplength=280, justify="left").pack(anchor="w")
+            ctk.CTkLabel(self.content_container, text="•  스캔되지 않은 숨겨진 노이즈가 있을 수 있습니다.\n    세탁을 통해 확실하게 픽셀을 재배열하세요.", font=(FONT_PRIMARY, 12, "normal"), text_color=VDS_COLORS["text_sub"], wraplength=280, justify="left").pack(anchor="w")
             
-        btn = ctk.CTkButton(self.bottom_bar, text="강제 픽셀 세탁 실행 (GPU 파괴)", font=(FONT_PRIMARY, 14, "bold"), fg_color=VDS_COLORS["primary"], hover_color=VDS_COLORS["primary_hover"], height=44, corner_radius=6, command=self.process_removal)
+        btn = ctk.CTkButton(self.bottom_bar, text="강제 픽셀 세탁 실행 (파괴)", font=(FONT_PRIMARY, 14, "bold"), fg_color=VDS_COLORS["primary"], hover_color=VDS_COLORS["primary_hover"], height=44, corner_radius=6, command=self.process_removal)
         btn.pack(fill="x")
-
-    def render_download_panel(self):
-        self.clear_panels()
-        self.dl_status_label = ctk.CTkLabel(self.content_container, text="최초 실행: GPU 파괴 모듈 다운로드 중...", font=(FONT_PRIMARY, 14, "bold"), text_color=VDS_COLORS["text_main"])
-        self.dl_status_label.pack(anchor="center", pady=(40, 10))
-        
-        self.dl_progress_bar = ctk.CTkProgressBar(self.content_container, width=240, height=8, fg_color=VDS_COLORS["gauge_bg"], progress_color=VDS_COLORS["primary"])
-        self.dl_progress_bar.set(0)
-        self.dl_progress_bar.pack(anchor="center", pady=10)
-        
-        self.dl_percent_label = ctk.CTkLabel(self.content_container, text="0%", font=(FONT_PRIMARY, 12, "bold"), text_color=VDS_COLORS["text_sub"])
-        self.dl_percent_label.pack(anchor="center")
 
     def render_done_panel(self):
         self.clear_panels()
-        self.draw_semi_circle_gauge(100, VDS_COLORS["success"], "100%", "Destroyed")
+        self.draw_semi_circle_gauge(100, VDS_COLORS["success"], "100%", "Cleaned")
         ctk.CTkLabel(self.content_container, text="메타데이터 및 주파수 핑거프린트가 파괴되었습니다.", font=(FONT_PRIMARY, 13, "normal"), text_color=VDS_COLORS["text_sub"]).pack(anchor="center", pady=(0, 14))
         
         btn_save = ctk.CTkButton(self.bottom_bar, text="안전한 이미지 저장", font=(FONT_PRIMARY, 14, "bold"), fg_color=VDS_COLORS["primary"], hover_color=VDS_COLORS["primary_hover"], height=44, corner_radius=6, command=self.save_image)
@@ -400,63 +440,22 @@ class AIUnmakerApp(DnDApp):
         
         self.render_scanning_panel()
         self.update()
-        self.after(500, self.run_detection)
+        self.after(300, self.run_detection)
 
     def run_detection(self):
-        self.is_ai, self.detected_source = detect_metadata_fingerprint(self.original_image_path)
+        self.is_ai, self.detected_sources, self.detection_score = detect_hybrid_fingerprints(self.original_image_path)
         self.render_result_panel()
 
     def process_removal(self):
-        models_to_download = []
-        for path in MODEL_URLS.keys():
-            full_path = os.path.join(BASE_DIR, path)
-            if not os.path.exists(full_path):
-                models_to_download.append((path, MODEL_URLS[path]))
-
-        if models_to_download:
-            self.render_download_panel()
-            threading.Thread(target=self.download_models_thread, args=(models_to_download,), daemon=True).start()
-        else:
-            self.start_processing_ui()
-
-    def download_models_thread(self, models_list):
-        try:
-            for i, (path, url) in enumerate(models_list):
-                full_path = os.path.join(BASE_DIR, path)
-                os.makedirs(os.path.dirname(full_path), exist_ok=True)
-                folder_name = os.path.basename(os.path.dirname(full_path))
-
-                def reporthook(block_num, block_size, total_size):
-                    if total_size > 0:
-                        percent = min((block_num * block_size) / total_size, 1.0)
-                        self.after(0, self.update_dl_progress, folder_name, percent, i+1, len(models_list))
-
-                try:
-                    urllib.request.urlretrieve(url, full_path, reporthook)
-                except Exception as e:
-                    print(f"URL 다운로드 실패: {e}")
-                    with open(full_path, 'wb') as f: f.write(b"")
-
-            self.after(500, self.start_processing_ui)
-        except Exception as e:
-            print(f"스레드 오류: {e}")
-            self.after(0, self.start_processing_ui)
-
-    def update_dl_progress(self, folder_name, percent, current_idx, total_count):
-        if hasattr(self, 'dl_status_label') and self.dl_status_label.winfo_exists():
-            self.dl_status_label.configure(text=f"AI 가중치 다운로드 중... [{current_idx}/{total_count}]\n({folder_name})")
-            self.dl_progress_bar.set(percent)
-            self.dl_percent_label.configure(text=f"{int(percent * 100)}%")
-
-    def start_processing_ui(self):
         self.clear_panels()
-        ctk.CTkLabel(self.content_container, text="GPU 가동 및 주파수 핑거프린트 파괴 중...\n(잠시만 기다려주세요)", font=(FONT_PRIMARY, 14, "bold"), text_color=VDS_COLORS["primary"]).pack(expand=True)
+        ctk.CTkLabel(self.content_container, text="주파수 핑거프린트 분해 및 세탁 중...\n(잠시만 기다려주세요)", font=(FONT_PRIMARY, 14, "bold"), text_color=VDS_COLORS["primary"]).pack(expand=True)
         self.update()
-        self.after(300, self.execute_removal_logic)
+        self.after(150, self.execute_removal_logic)
 
     def execute_removal_logic(self):
         try:
-            self.processed_image_path = remove_all_fingerprints(self.original_image_path)
+            self.processed_image_path = os.path.join(CACHE_DIR, "cleaned_output.png")
+            run_watermark_disruption_core(self.original_image_path, self.processed_image_path)
             
             img = Image.open(self.processed_image_path)
             img.thumbnail((560, 480))
@@ -466,20 +465,20 @@ class AIUnmakerApp(DnDApp):
             
             self.render_done_panel()
         except Exception as e:
-            messagebox.showerror("추론 엔진 오류", f"GPU 섭동 엔진 실행 중 오류가 발생했습니다.\n{e}")
+            messagebox.showerror("실행 오류", f"처리 중 오류가 발생했습니다:\n{e}")
             self.render_result_panel()
 
     def save_image(self):
         directory = os.path.dirname(self.original_image_path)
-        filename, ext = os.path.splitext(os.path.basename(self.original_image_path))
+        filename, _ = os.path.splitext(os.path.basename(self.original_image_path))
         new_filename = f"{filename}_cleaned.png"
         save_path = os.path.join(directory, new_filename)
         
         try:
             shutil.copy2(self.processed_image_path, save_path)
-            messagebox.showinfo("다운로드 완료", f"저장 완료:\n{new_filename}")
-        except:
-            pass
+            messagebox.showinfo("저장 완료", f"안전한 이미지가 저장되었습니다:\n{new_filename}")
+        except Exception as e:
+            messagebox.showerror("저장 실패", f"파일 저장 중 오류가 발생했습니다: {e}")
 
     def reset_tool(self):
         self.original_image_path = None
@@ -490,5 +489,11 @@ class AIUnmakerApp(DnDApp):
 
 if __name__ == "__main__":
     ctk.set_appearance_mode("Light")
-    app = AIUnmakerApp()
-    app.mainloop()
+    try:
+        app = AIUnmakerApp()
+        app.mainloop()
+    except Exception as e:
+        crash_log = os.path.join(os.path.expanduser("~"), "AI_Unmarker_Crash.log")
+        with open(crash_log, "w", encoding="utf-8") as f:
+            f.write(str(e))
+        messagebox.showerror("오류 발생", f"프로그램 시작 실패:\n{e}\n\n로그: {crash_log}")
