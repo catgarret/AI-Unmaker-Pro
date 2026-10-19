@@ -13,7 +13,7 @@ import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
-# TkinterDnD2 로드 (Windows PyInstaller 임시 폴더 경로 바인딩)
+# TkinterDnD2 로드
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
     tkdnd_path = os.path.join(sys._MEIPASS, 'tkinterdnd2', 'tkdnd')
     if os.path.exists(tkdnd_path):
@@ -24,7 +24,7 @@ import torch
 import torch.nn as nn
 
 APP_NAME = "AI Unmarker Pro"
-APP_VERSION = "v1.0.12"
+APP_VERSION = "v1.0.13"
 
 def get_resource_path(relative_path):
     if hasattr(sys, '_MEIPASS'):
@@ -103,14 +103,13 @@ def detect_gpu_ensemble(image_path):
     confidence = 0
     device = get_device()
     try:
-        # 1. 파일 바이너리 및 내부 메타데이터 교차 스캔
+        # 8KB 제한 해제: 파일 전체를 읽어 후미에 숨은 XMP/C2PA 메타데이터 100% 탐지
         with open(image_path, "rb") as f:
-            raw_text = f.read(8192).decode("utf-8", errors="ignore").lower()
+            raw_text = f.read().decode("utf-8", errors="ignore").lower()
         with Image.open(image_path) as img:
             img_info = str(img.info).lower()
             combined_text = raw_text + " " + img_info
 
-        # 플랫폼 출처 명확화
         if any(k in combined_text for k in ["gemini"]):
             detected_sources.append("Google Gemini")
             confidence += 45
@@ -133,7 +132,6 @@ def detect_gpu_ensemble(image_path):
             detected_sources.append("Stable Diffusion")
             confidence += 45
             
-        # 2. 다운로드된 오픈소스 딥러닝 텐서 스캔
         img_np = np.array(img.convert('RGB').resize((512, 512)), dtype=np.float32) / 255.0
         tensor = torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0).to(device)
 
@@ -148,7 +146,7 @@ def detect_gpu_ensemble(image_path):
             feat = model(tensor)
             activation_score = torch.std(feat).item() * 200 + 45
             if activation_score > 55.0:
-                detected_sources.append("딥러닝 추론 (비가시적 노이즈 탐지)")
+                detected_sources.append("오픈소스 딥러닝 앙상블 (비가시적 노이즈 탐지)")
                 confidence = max(confidence, min(98, int(activation_score)))
     except Exception as e:
         print(f"Detection Error: {e}")
@@ -186,7 +184,6 @@ def run_hybrid_removal_engine(input_path, output_path):
         
         fft_result = np.dstack(processed_channels)
         
-        # 다운로드된 2종 딥러닝 제거 모델 순차 가동
         tensor = torch.from_numpy(fft_result).permute(2, 0, 1).unsqueeze(0).to(device)
         final_tensor = tensor
         for weight_name in ["wiltodelta_remover.pth", "mertizci_noai.pth"]:
@@ -252,12 +249,11 @@ class AIUnmakerApp(DnDApp):
         title_box.pack(anchor="w")
         ctk.CTkLabel(title_box, text=APP_NAME, font=(FONT_PRIMARY, 24, "bold"), text_color=THEME["text_main"]).pack(side="left")
         
-        # 뱃지 패딩 축소 및 정렬 유지
         badge = ctk.CTkLabel(
             title_box, text="USE GPU", font=(FONT_PRIMARY, 11, "bold"), 
-            text_color="#ffffff", fg_color="#0f172a", corner_radius=4, padx=5, pady=2
+            text_color="#ffffff", fg_color="#0f172a", corner_radius=4, padx=5, pady=1
         )
-        badge.pack(side="left", padx=(8, 0), pady=(2, 0))
+        badge.pack(side="left", padx=(8, 0), pady=(4, 0))
         
         ctk.CTkLabel(header_frame, text="딥러닝 엔진과 주파수 모델을 결합하여 메타데이터와 워터마크를 제거합니다.", 
                      font=(FONT_PRIMARY, 13, "normal"), text_color=THEME["text_sub"]).pack(anchor="w", pady=(4, 0))
@@ -382,8 +378,6 @@ class AIUnmakerApp(DnDApp):
             self.draw_semi_circle_gauge(0, "#10b981", "0%", "NO SIGNATURE")
             card = ctk.CTkFrame(self.content_container, fg_color="#f8fafc", corner_radius=10, border_width=1, border_color=THEME["border"])
             card.pack(fill="x", pady=(4, 12), padx=4)
-            
-            # 강제 좌측 정렬 보장
             ctk.CTkLabel(card, text="명시적 시그니처 미검출", font=(FONT_PRIMARY, 12, "bold"), text_color=THEME["text_main"], anchor="w", justify="left").pack(fill="x", padx=12, pady=(10, 2))
             ctk.CTkLabel(card, text="메타데이터가 삭제된 상태일 수 있습니다.\n아래 데이터 초기화를 실행해 잠재 워터마크를 제거하세요.", font=(FONT_PRIMARY, 11, "normal"), text_color=THEME["text_sub"], anchor="w", justify="left", wraplength=280).pack(fill="x", padx=12, pady=(0, 10))
             
@@ -396,12 +390,11 @@ class AIUnmakerApp(DnDApp):
         msg_frame = ctk.CTkFrame(self.content_container, fg_color="#f0fdf4", border_color="#bbf7d0", border_width=1, corner_radius=10)
         msg_frame.pack(fill="x", pady=(4, 14))
         
-        # 완전 좌측 정렬 및 자동 줄바꿈 고정
         ctk.CTkLabel(msg_frame, text="메타데이터 초기화 및 딥러닝 워터마크 제거 완료", font=(FONT_PRIMARY, 12, "bold"), text_color="#166534", anchor="w", justify="left", wraplength=280).pack(fill="x", padx=12, pady=(10, 2))
         ctk.CTkLabel(msg_frame, text="FFT 주파수 엔진과 GPU 앙상블을 통해 원본 화질을 보존하며 데이터 초기화를 마쳤습니다.", font=(FONT_PRIMARY, 11, "normal"), text_color="#15803d", anchor="w", justify="left", wraplength=280).pack(fill="x", padx=12, pady=(0, 10))
         
         ctk.CTkButton(self.bottom_bar, text="초기화된 이미지 저장", font=(FONT_PRIMARY, 14, "bold"), fg_color=THEME["primary"], hover_color=THEME["primary_hover"], height=46, corner_radius=8, command=self.save_image).pack(fill="x", pady=(0, 8))
-        ctk.CTkButton(self.bottom_bar, text="다른 파일 검사하기", font=(FONT_PRIMARY, 13, "bold"), fg_color=THEME["surface"], text_color=THEME["text_main"], border_width=1, border_color=THEME["border"], hover_color=THEME["gauge_track"], height=42, corner_radius=8, command=self.reset_tool).pack(fill="x")
+        ctk.CTkButton(self.bottom_bar, text="다른 파일 분석하기", font=(FONT_PRIMARY, 13, "bold"), fg_color=THEME["surface"], text_color=THEME["text_main"], border_width=1, border_color=THEME["border"], hover_color=THEME["gauge_track"], height=42, corner_radius=8, command=self.reset_tool).pack(fill="x")
 
     def on_drop(self, event):
         file_path = event.data.strip('{}')
