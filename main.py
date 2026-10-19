@@ -5,7 +5,7 @@ if __name__ == "__main__":
 import os
 import sys
 
-# [Windows 필수] PyInstaller 임시 폴더 내 드래그앤드롭 라이브러리 강제 바인딩
+# Windows PyInstaller 임시 폴더 내 드래그 앤 드롭 라이브러리 경로 강제 바인딩
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
     tkdnd_path = os.path.join(sys._MEIPASS, 'tkinterdnd2', 'tkdnd')
     if os.path.exists(tkdnd_path):
@@ -21,7 +21,7 @@ import shutil
 import threading
 import urllib.request
 
-APP_NAME = "AI Unmarker Pro (GPU/Core)"
+APP_NAME = "AI Unmarker Pro (Core)"
 APP_VERSION = "v1.0.4"
 
 def get_resource_path(relative_path):
@@ -38,7 +38,6 @@ def get_resource_path(relative_path):
 FONTS_DIR = get_resource_path("fonts")
 ICONS_DIR = get_resource_path("icons")
 
-# 사용자 홈 폴더 내 영구 캐시 (배포 파일 용량에는 영향 없음)
 CACHE_DIR = os.path.join(os.path.expanduser("~"), ".ai_unmarker")
 MODELS_DIR = os.path.join(CACHE_DIR, "models")
 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -112,15 +111,11 @@ def get_upload_icon(size=44, color="#6b7280"):
     res_img = img.resize((size, size), Image.Resampling.LANCZOS)
     return ctk.CTkImage(light_image=res_img, dark_image=res_img, size=(size, size))
 
-# ==============================================================================
-# [1] 바이너리 + 2D FFT 주파수 스펙트럼 분석 탐지
-# ==============================================================================
 def detect_hybrid_fingerprints(image_path):
     detected_sources = []
     confidence = 0
 
     try:
-        # 1. 원본 텍스트 메타데이터 및 청크 스캔
         with open(image_path, "rb") as f:
             raw_text = f.read().decode("utf-8", errors="ignore").lower()
 
@@ -137,7 +132,6 @@ def detect_hybrid_fingerprints(image_path):
             detected_sources.append("Stable Diffusion 태그")
             confidence += 45
 
-        # 2. 2D FFT 주파수 스펙트럼 격자 이상치 분석
         with Image.open(image_path) as img:
             gray = img.convert('L').resize((512, 512))
             arr = np.array(gray, dtype=np.float32)
@@ -165,9 +159,6 @@ def detect_hybrid_fingerprints(image_path):
     final_score = min(max(confidence, 90 if unique_sources else 0), 100)
     return (len(unique_sources) > 0), unique_sources, final_score
 
-# ==============================================================================
-# [2] 고속 2D-FFT 위상 교란(Spectral Phase Jitter) 비가시적 워터마크 파괴 엔진
-# ==============================================================================
 def run_watermark_disruption_core(input_path, output_path):
     with Image.open(input_path) as pil_img:
         has_alpha = (pil_img.mode in ('RGBA', 'LA') or (pil_img.mode == 'P' and 'transparency' in pil_img.info))
@@ -181,7 +172,6 @@ def run_watermark_disruption_core(input_path, output_path):
 
         img_arr = np.array(rgb_img, dtype=np.float32) / 255.0
 
-        # R, G, B 채널별 2D 푸리에 변환 및 고주파 위상 섭동
         processed_channels = []
         for c in range(3):
             ch = img_arr[:, :, c]
@@ -196,17 +186,14 @@ def run_watermark_disruption_core(input_path, output_path):
             y, x = np.ogrid[:h, :w]
             dist_from_center = np.sqrt((x - cx)**2 + (y - cy)**2)
 
-            # SynthID와 비가시적 워터마크가 기생하는 고주파 캐리어 영역 타겟팅
             hf_mask = dist_from_center > (min(h, w) * 0.08)
             phase_jitter = (np.random.rand(h, w) - 0.5) * 0.024
             phase[hf_mask] += phase_jitter[hf_mask]
 
-            # 역변환으로 픽셀 복원
             f_perturbed = mag * np.exp(1j * phase)
             f_ishift = np.fft.ifftshift(f_perturbed)
             ch_clean = np.fft.ifft2(f_ishift).real
 
-            # 잔류 양자화 노이즈 미세 상쇄
             dither = (np.random.rand(h, w) - 0.5) * (1.2 / 255.0)
             ch_clean = np.clip(ch_clean + dither, 0.0, 1.0)
             processed_channels.append(ch_clean)
@@ -220,23 +207,19 @@ def run_watermark_disruption_core(input_path, output_path):
         else:
             out_img = Image.fromarray(result_uint8, 'RGB')
 
-        # 모든 메타데이터와 코멘트 청크를 날린 순수 PNG로 압축 저장
         out_img.save(output_path, format="PNG", optimize=True)
 
-# ==============================================================================
-# [3] UI 프레임워크
-# ==============================================================================
 VDS_COLORS = {
-    "bg": "#f5f6f8",          
-    "surface": "#ffffff",     
-    "border": "#e5e7eb",      
-    "text_main": "#111827",   
-    "text_sub": "#6b7280",    
-    "primary": "#171717",     
+    "bg": "#f5f6f8",
+    "surface": "#ffffff",
+    "border": "#e5e7eb",
+    "text_main": "#111827",
+    "text_sub": "#6b7280",
+    "primary": "#171717",
     "primary_hover": "#333333",
-    "accent": "#ef4444",      
-    "success": "#10b981",     
-    "gauge_bg": "#f3f4f6"     
+    "accent": "#ef4444",
+    "success": "#10b981",
+    "gauge_bg": "#f3f4f6"
 }
 
 class DnDApp(ctk.CTk, TkinterDnD.DnDWrapper):
@@ -244,7 +227,7 @@ class DnDApp(ctk.CTk, TkinterDnD.DnDWrapper):
         super().__init__(*args, **kwargs)
         self.TkdndVersion = TkinterDnD._require(self)
 
-class AIUnmarkerApp(DnDApp):
+class AIUnmakerApp(DnDApp):
     def __init__(self):
         super().__init__()
         self.title(f"{APP_NAME} {APP_VERSION}")
@@ -266,7 +249,6 @@ class AIUnmarkerApp(DnDApp):
         self.dnd_bind('<<Drop>>', self.on_drop)
         self.render_idle_panel()
 
-        # 앱 실행 시 백그라운드로 보조 가중치 다운로드
         self.after(300, self.check_and_download_models_startup)
 
     def apply_platform_icon(self):
@@ -359,7 +341,7 @@ class AIUnmarkerApp(DnDApp):
             try:
                 urllib.request.urlretrieve(url, dest)
             except Exception as e:
-                print(f"가중치 백그라운드 캐시 예외: {e}")
+                print(f"가중치 캐시 예외: {e}")
 
     def render_idle_panel(self):
         self.clear_panels()

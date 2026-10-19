@@ -40,14 +40,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller customtkinter tkinterdnd2 Pillow numpy
 
-      # Windows 빌드 (.exe) - 30MB대 단일 실행 파일 생성
+      # Windows 빌드 (.exe)
       - name: Build for Windows
         if: runner.os == 'Windows'
         run: |
           pyinstaller --noconfirm --noconsole --onefile --icon=icons/icon.ico --name "AI-Unmarker-Pro" --add-data "fonts;fonts" --add-data "icons;icons" --collect-all customtkinter --collect-all tkinterdnd2 main.py
           python -c "import os, shutil; os.makedirs('release_pkg', exist_ok=True); shutil.copy('dist/AI-Unmarker-Pro.exe', 'release_pkg/'); [shutil.copytree(f, os.path.join('release_pkg', f), dirs_exist_ok=True) for f in ['fonts', 'icons'] if os.path.isdir(f)]; shutil.make_archive('AI-Unmarker-Pro-Windows-x64', 'zip', 'release_pkg')"
 
-      # macOS 빌드 (.app) - 단일 라인 무인 실행
+      # macOS 빌드 (.app)
       - name: Build for macOS
         if: runner.os == 'macOS'
         run: |
