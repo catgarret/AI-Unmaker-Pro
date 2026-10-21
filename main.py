@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""AI Unmarker Pro v1.3.0: unified local processing and official verification.
+"""AI Unmarker Pro v1.3.1: local processing and explicit official API verification.
 
 Run: python main.py
 Build: python build.py
@@ -18,9 +18,9 @@ from __future__ import annotations
 import os
 import sys
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 ENGINE_ID = "local-qwen-q4-detail-v3"
-RELEASE_ID = "2026-10-21.7"
+RELEASE_ID = "2026-10-21.8"
 
 # Leave CPU capacity for the desktop while a single image is being processed.
 for _thread_option in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
@@ -5306,143 +5306,6 @@ def verify_openai_file(path, *, allow_upload=False):
             "detail": "미검출은 AI로 생성되지 않았다는 뜻이 아닙니다. Google 검사는 별도로 수행하십시오."}
 
 
-# verification_records.py
-# ------------------------------------------------------------------------
-import hashlib
-import json
-import os
-import re
-import sys
-import tempfile
-from datetime import datetime, timezone
-from pathlib import Path
-
-VERIFICATION_RECORD_LIMIT = 128 * 1024
-VERIFICATION_PROVIDERS = {"google": "Google", "openai": "OpenAI"}
-VERIFICATION_STATUSES = ("detected", "not_detected", "not_tested", "error")
-
-
-def verification_store_root():
-    override = os.environ.get("UNMARK_VERIFICATION_STORE")
-    if override:
-        root = Path(override).expanduser()
-        if not root.is_absolute():
-            raise ValueError("검사 기록 폴더는 절대 경로여야 합니다.")
-        return root
-    if sys.platform == "darwin":
-        base = Path.home() / "Library" / "Application Support"
-    elif os.name == "nt":
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    else:
-        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return base / "AI Unmarker Pro" / "verification-records"
-
-
-def verification_file_hash(path):
-    """이름이 같아도 한 바이트라도 바뀌면 다른 검사 대상으로 취급합니다."""
-    with Path(path).open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
-def normalise_verification_record(record):
-    if not isinstance(record, dict):
-        raise ValueError("검사 기록 형식이 올바르지 않습니다.")
-    digest = record.get("sha256")
-    provider, method = record.get("provider"), record.get("method")
-    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
-        raise ValueError("검사한 파일의 SHA-256이 필요합니다.")
-    if not isinstance(provider, str) or provider not in VERIFICATION_PROVIDERS or method not in ("official_api", "official_web_observation"):
-        raise ValueError("지원하는 공식 검사 기록이 아닙니다.")
-    if provider == "google" and method == "official_api":
-        raise ValueError("Google 웹 검사 기록만 지원합니다.")
-    try:
-        checked = datetime.fromisoformat(record["checked_at"])
-        if checked.tzinfo is None:
-            checked = checked.replace(tzinfo=timezone.utc)
-    except (KeyError, TypeError, ValueError):
-        raise ValueError("검사 날짜가 올바르지 않습니다.") from None
-    signals = record.get("signals")
-    if not isinstance(signals, dict) or not signals or set(signals) - {"synthid", "c2pa"}:
-        raise ValueError("SynthID와 C2PA의 개별 검사 결과가 필요합니다.")
-    clean = {}
-    for name, signal in signals.items():
-        status = signal.get("status") if isinstance(signal, dict) else None
-        if status not in VERIFICATION_STATUSES:
-            raise ValueError("검사 상태를 확인하지 못했습니다.")
-        clean[name] = {"status": status, "detected": status == "detected" if status in
-                       ("detected", "not_detected") else None}
-    return {"schema": "unmarker.verification.v1", "sha256": digest, "provider": provider,
-            "method": method, "checked_at": checked.astimezone(timezone.utc).isoformat(),
-            "signals": clean, "imported": record.get("imported") is True}
-
-
-def read_verification_records(path):
-    """선택한 JSON만 읽습니다. 기록 안의 URL·경로를 열거나 실행하지 않습니다."""
-    with Path(path).open("rb") as stream:
-        raw = stream.read(VERIFICATION_RECORD_LIMIT + 1)
-    if len(raw) > VERIFICATION_RECORD_LIMIT:
-        raise ValueError("검사 기록은 128 KiB 이하여야 합니다.")
-    try:
-        payload = json.loads(raw)
-    except (ValueError, UnicodeError, RecursionError):
-        raise ValueError("검사 기록 JSON을 읽지 못했습니다.") from None
-    rows = payload.get("records", [payload]) if isinstance(payload, dict) else payload
-    if not isinstance(rows, list) or not 1 <= len(rows) <= 64:
-        raise ValueError("검사 기록은 1~64개여야 합니다.")
-    return [normalise_verification_record(row) for row in rows]
-
-
-def save_verification_record(record, *, root=None):
-    """제공사별 최신 기록을 원자적으로 저장해 중간 파일을 읽지 않게 합니다."""
-    record = normalise_verification_record(record)
-    folder = Path(root) if root is not None else verification_store_root()
-    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
-    destination = folder / (record["sha256"] + "." + record["provider"] + ".json")
-    if destination.exists():
-        try:
-            previous = read_verification_records(destination)[0]
-            if previous["checked_at"] > record["checked_at"]:
-                return previous
-        except (OSError, ValueError):
-            pass
-    fd, temporary = tempfile.mkstemp(prefix=".verification-", dir=folder)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(record, stream, ensure_ascii=False, indent=2)
-        os.replace(temporary, destination)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
-    return record
-
-
-def file_verification_records(path, *, root=None):
-    digest = verification_file_hash(path)
-    folder = Path(root) if root is not None else verification_store_root()
-    records, errors = [], []
-    for provider in VERIFICATION_PROVIDERS:
-        try:
-            rows = read_verification_records(folder / (digest + "." + provider + ".json"))
-            if len(rows) != 1 or rows[0]["sha256"] != digest or rows[0]["provider"] != provider:
-                raise ValueError("file binding mismatch")
-            records.extend(rows)
-        except FileNotFoundError:
-            continue
-        except (OSError, ValueError):
-            errors.append(provider)
-    return {"sha256": digest, "records": records, "record_errors": errors}
-
-
-def import_file_verification(path, report_path, *, root=None):
-    """가져오기는 현재 파일과 해시가 일치하는 기록에만 적용됩니다."""
-    digest = verification_file_hash(path)
-    rows = [row for row in read_verification_records(report_path) if row["sha256"] == digest]
-    if not rows:
-        raise ValueError("선택한 이미지와 일치하는 검사 기록이 없습니다.")
-    for row in rows:
-        save_verification_record(dict(row, imported=True), root=root)
-    return file_verification_records(path, root=root)
-
-
 # app_backend.py
 # ------------------------------------------------------------------------
 import argparse
@@ -5604,7 +5467,6 @@ def app_scan_file(path):
     return {"app": app_identity(), "metadata": metadata,
             "metadata_observation": _app_metadata_observation(metadata), "visible": visible, "frequency": frequency,
             "open_watermarks": open_watermarks,
-            "external_verification": file_verification_records(path),
             "elapsed_seconds": round(time.perf_counter() - started, 4),
             "synthid": _app_synthid_observation(metadata)}
 
@@ -5662,7 +5524,6 @@ def app_process(input_path, output_path, options=None, progress_callback=None, c
         input_scan = {"metadata": initial["before"], "visible": input_visible,
                       "metadata_observation": _app_metadata_observation(initial["before"]),
                       "frequency": input_frequency, "open_watermarks": input_open,
-                      "external_verification": file_verification_records(snapshot),
                       "synthid": _app_synthid_observation(initial["before"])}
         current = prepared
         _app_cancel(cancel_event)
@@ -5775,7 +5636,6 @@ def app_process(input_path, output_path, options=None, progress_callback=None, c
         output_scan = {"metadata": final["after"], "visible": check, "frequency": frequency_after,
                        "metadata_observation": _app_metadata_observation(final["after"]),
                        "open_watermarks": open_after,
-                       "external_verification": file_verification_records(output),
                        "synthid": _app_synthid_observation(final["after"])}
         # This flag describes the selected local checks, never SynthID removal.
         verified = not (regeneration["processed"] or pixel_result["processed"]) and visible_result["status"] in ("not_requested", "no_watermark", "cleaned", "not_detected")
@@ -6515,13 +6375,68 @@ def app_restart_after_setup():
     subprocess.Popen(command, env=environment, close_fds=True)
 
 
+# ui_components.py
+# ------------------------------------------------------------------------
+UI_COLORS = {"bg": "#F5F6F8", "surface": "#FFFFFF", "line": "#E2E6EC",
+             "ink": "#172033", "sub": "#626E80", "soft": "#F3F5F8",
+             "green": "#157C61", "amber": "#995A0A", "red": "#B13E43"}
+UI_LAYOUT = {"outer": 24, "panel_width": 360, "panel_padding": 20,
+             "card_padding": 14, "card_gap": 10, "control_height": 40,
+             "compact_control_height": 28, "paragraph_line_gap": 3}
+
+
+def paragraph_widget_class(ctk, font_name):
+    """명시적으로 나눈 설명 줄 사이에 일정한 여백을 주는 공통 위젯입니다.
+
+    CTkLabel 한 개에 긴 문자열을 넣으면 행간을 지정할 수 없습니다.
+    문장별 라벨을 쌓아 행간을 유지하고, 긴 문장은 지정한 폭에서 줄바꿈합니다.
+    configure(text=...)를 제공하여 상태 갱신 코드가 표시 구현을 알 필요가 없습니다.
+    """
+    class Paragraph(ctk.CTkFrame):
+        def __init__(self, parent, text="", size=12, color=None, wraplength=300,
+                     justify="left", **kwargs):
+            super().__init__(parent, fg_color="transparent", corner_radius=0,
+                             width=wraplength, height=0, **kwargs)
+            self._paragraph_text = None
+            self._paragraph_color = color or UI_COLORS["sub"]
+            self._paragraph_size = size
+            self._paragraph_width = wraplength
+            self._paragraph_justify = justify
+            self._paragraph_rows = []
+            self.configure(text=text)
+
+        def configure(self, **kwargs):
+            text = kwargs.pop("text", None)
+            color = kwargs.pop("text_color", None)
+            if kwargs:
+                super().configure(**kwargs)
+            if color is not None:
+                self._paragraph_color = color
+                for row in self._paragraph_rows:
+                    row.configure(text_color=color)
+            if text is None or text == self._paragraph_text:
+                return
+            self._paragraph_text = text
+            for row in self._paragraph_rows:
+                row.destroy()
+            self._paragraph_rows.clear()
+            for index, line in enumerate(str(text).splitlines()):
+                row = ctk.CTkLabel(self, text=line, height=round(self._paragraph_size * 1.5),
+                    font=(font_name, self._paragraph_size), text_color=self._paragraph_color,
+                    wraplength=self._paragraph_width, justify=self._paragraph_justify,
+                    anchor="center" if self._paragraph_justify == "center" else "w")
+                row.pack(fill="x", pady=(UI_LAYOUT["paragraph_line_gap"] if index else 0, 0))
+                self._paragraph_rows.append(row)
+    return Paragraph
+
+
 # desktop_ui.py
 # ------------------------------------------------------------------------
 # 첨부 안내와 확장자를 분리해 문구 변경이 줄 간격에 영향을 주지 않게 합니다.
 UI_UPLOAD_FORMATS = "PNG · JPG · WEBP"
 UI_UPLOAD_FORMAT_GAP = 10
 # 주 작업과 처리 옵션은 같은 크기로 유지해 문구가 바뀌어도 균형을 맞춥니다.
-UI_ACTION_BUTTON_HEIGHT = 40
+UI_ACTION_BUTTON_HEIGHT = UI_LAYOUT["control_height"]
 UI_SETUP_SPACING = {"outer": 20, "inner": 16, "title_body": 14, "body_lines": 4, "section": 12}
 
 
@@ -6661,26 +6576,22 @@ def _ui_compact_evidence(values, limit=3):
 
 
 def _ui_synthid_evidence(scan):
-    """외부 검사 출처와 파일 연결을 확인합니다. 주파수 추정은 사용하지 않습니다."""
-    external = (scan or {}).get("external_verification") or {}
-    rows = [row for row in external.get("records", []) if isinstance(row, dict)
-            and row.get("sha256") == external.get("sha256") and row.get("sha256")
-            and row.get("provider") in ("google", "openai")]
+    """이번 실행에서 실제 요청한 API 응답만 사용합니다. 저장 기록은 읽지 않습니다."""
+    result = (scan or {}).get("live_verification") or {}
+    rows = [result] if (result.get("provider") == "openai"
+        and result.get("method") == "official_api") else []
     positives = [row for row in rows if (row.get("signals", {}).get("synthid") or {}).get("status") == "detected"]
     negatives = [row for row in rows if (row.get("signals", {}).get("synthid") or {}).get("status") == "not_detected"]
     errors = [row for row in rows if (row.get("signals", {}).get("synthid") or {}).get("status") == "error"]
-    status = "detected" if positives else "error" if errors or external.get("record_errors") else "not_detected" if negatives else "not_tested"
+    status = "detected" if positives else "error" if errors else "not_detected" if negatives else "not_tested"
     names = {"google": "Google", "openai": "OpenAI"}
     labels = {"detected": "탐지됨", "not_detected": "미검출", "not_tested": "미검사", "error": "검사 오류"}
     lines = []
     for row in rows:
         signal = (row.get("signals", {}).get("synthid") or {}).get("status", "not_tested")
-        method = "웹 검사 기록" if row.get("method") == "official_web_observation" else "API 검사"
-        if row.get("imported") and method == "API 검사":
-            method = "가져온 API 기록"
-        lines.append(f"{names[row['provider']]} · {labels.get(signal, '미검사')}\n{method} · {row.get('checked_at', '')[:10]}")
+        lines.append(f"{names[row['provider']]} · {labels.get(signal, '미검사')}\n실제 API 응답 · {row.get('checked_at', '')[:10]}")
     return {"status": status, "records": rows, "positive_providers": [names[row["provider"]] for row in positives],
-            "detail": "\n".join(lines) or "공식 검사 결과를 연결해 주세요. 로컬에서는 SynthID를 판정하지 않습니다."}
+            "detail": "\n".join(lines) or "로컬 검출기가 없어 판정할 수 없습니다.\n공식 웹 검사 또는 API 검사가 필요합니다."}
 
 
 def _ui_detection_summary(scan):
@@ -6688,11 +6599,11 @@ def _ui_detection_summary(scan):
     synthid = _ui_synthid_evidence(scan)
     if synthid["status"] == "detected":
         return {"state": "detected", "title": "SynthID 탐지됨", "body":
-                " · ".join(synthid["positive_providers"]) + " 검사 기록\n동일한 파일의 결과입니다."}
+                " · ".join(synthid["positive_providers"]) + " 공식 API 검사 결과입니다.\n이번 실행에서 검사를 요청했습니다."}
     if any((row.get("signals", {}).get("c2pa") or {}).get("status") == "detected"
            for row in synthid["records"]):
         return {"state": "detected", "title": "C2PA 출처 탐지됨", "body":
-                "연결된 공식 검사에서 출처 정보를 확인했습니다.\nSynthID 결과는 아래에 별도로 표시합니다."}
+                "공식 API 검사에서 출처 정보를 확인했습니다.\nSynthID 결과는 아래에 별도로 표시합니다."}
     public = (scan or {}).get("open_watermarks") or {}
     visible = (scan or {}).get("visible") or {}
     metadata = _ui_metadata_evidence(scan)
@@ -6706,10 +6617,10 @@ def _ui_detection_summary(scan):
         return {"state": "detected", "title": "메타데이터 탐지됨", "body":
                 "메타데이터 · " + _ui_compact_evidence(metadata["names"]) + "\n" + note}
     if synthid["status"] == "error":
-        return {"state": "review", "title": "공식 검사 확인 필요", "body": "검사 오류 또는 읽을 수 없는 기록이 있습니다.\n오류는 미검출 결과가 아닙니다."}
+        return {"state": "review", "title": "공식 검사 확인 필요", "body": "공식 검사에서 오류가 발생했습니다.\n오류는 미검출 결과가 아닙니다."}
     if synthid["status"] == "not_tested":
-        return {"state": "unverified", "title": "SynthID 검사 필요", "body": "로컬 검사를 마쳤습니다.\nSynthID 공식 검사 결과는 없습니다."}
-    return {"state": "checked", "title": "연결된 검사에서 미검출", "body": "확인한 제공사의 결과만 반영했습니다.\nAI 생성 여부 전체를 판정한 것은 아닙니다."}
+        return {"state": "unverified", "title": "SynthID 미검사", "body": "이 앱에는 로컬 SynthID 검출기가 없습니다.\n공식 검사를 진행해 주세요."}
+    return {"state": "checked", "title": "공식 API 검사에서 미검출", "body": "OpenAI 검사 결과입니다.\nAI 생성 여부 전체를 판정한 것은 아닙니다."}
 
 
 def launch_gui():
@@ -6748,10 +6659,9 @@ def launch_gui():
     # can be retried after setup, without fixing the root's class at startup.
     COPY, REFUSE_DROP = "copy", "refuse_drop"
 
-    C = {"bg": "#F5F6F8", "surface": "#FFFFFF", "line": "#E3E6EB",
-         "ink": "#101827", "sub": "#687180", "soft": "#F1F3F6",
-         "green": "#179C79", "amber": "#AD650F", "red": "#B54747"}
+    C = UI_COLORS
     font_name = ui_font_family()
+    Paragraph = paragraph_widget_class(ctk, font_name)
 
     def thumb(path):
         with Image.open(path) as raw:
@@ -6818,8 +6728,8 @@ def launch_gui():
                     and "CustomTkinter_shapes_font" not in tkfont.families(self)):
                 ctk.DrawEngine.preferred_drawing_method = "polygon_shapes"
             self.app_identity = ui_apply_app_identity(self, app_title)
-            self.geometry("1040x700")
-            self.minsize(840, 610)
+            self.geometry("1120x760")
+            self.minsize(940, 680)
             self.configure(fg_color=C["bg"])
             self.grid_columnconfigure(0, weight=1)
             self.grid_rowconfigure(1, weight=1)
@@ -6872,6 +6782,9 @@ def launch_gui():
                 self.logs.append("앱 아이콘 파일을 찾거나 적용하지 못했습니다. 확인 경로:\n" +
                     "\n".join(self.app_identity["searched"] + self.app_identity["errors"]))
             self.protocol("WM_DELETE_WINDOW", self._close)
+            # 파일 선택은 버튼·드롭·키보드가 모두 같은 준비 상태 검사를 사용합니다.
+            open_key = "<Command-o>" if self.tk.call("tk", "windowingsystem") == "aqua" else "<Control-o>"
+            self.bind(open_key, lambda _event: self._pick())
             self._init_drag_and_drop()
             self.poll_timer = self.after(60, self._poll)
             # Paint first, then inspect cached models before cold native imports.
@@ -6988,7 +6901,8 @@ def launch_gui():
                 text_color=color or C["ink"], **kwargs)
 
         def button(self, parent, text, command, primary=False, **kwargs):
-            return ctk.CTkButton(parent, text=text, command=command, corner_radius=8,
+            kwargs.setdefault("height", UI_LAYOUT["control_height"])
+            return ctk.CTkButton(parent, text=text, command=command, corner_radius=10,
                 font=(font_name, 13, "bold"), fg_color=C["ink"] if primary else C["soft"],
                 hover_color="#293345" if primary else C["line"],
                 text_color="#FFFFFF" if primary else C["ink"], **kwargs)
@@ -7016,7 +6930,7 @@ def launch_gui():
 
         def _build(self):
             header = ctk.CTkFrame(self, fg_color="transparent")
-            header.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 16))
+            header.grid(row=0, column=0, sticky="ew", padx=UI_LAYOUT["outer"], pady=(24, 20))
             title_row = ctk.CTkFrame(header, fg_color="transparent")
             title_row.pack(anchor="w")
             self.label(title_row, "AI Unmarker Pro", 26, True, height=32).pack(side="left")
@@ -7025,9 +6939,9 @@ def launch_gui():
             self.label(header, "이미지를 처리하고 메타데이터를 삭제합니다.", 13,
                        color=C["sub"]).pack(anchor="w", pady=(6, 0))
             body = ctk.CTkFrame(self, fg_color="transparent")
-            body.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 20))
+            body.grid(row=1, column=0, sticky="nsew", padx=UI_LAYOUT["outer"], pady=(0, 24))
             body.grid_columnconfigure(0, weight=1, minsize=340)
-            body.grid_columnconfigure(1, weight=0, minsize=320)
+            body.grid_columnconfigure(1, weight=0, minsize=UI_LAYOUT["panel_width"])
             body.grid_rowconfigure(0, weight=1)
             preview = ctk.CTkFrame(body, fg_color=C["surface"], border_color=C["line"], border_width=1, corner_radius=12)
             self.preview_surface = preview
@@ -7066,16 +6980,16 @@ def launch_gui():
             self.caption = self.label(preview, "원본 파일은 그대로 보관됩니다.", 11, color=C["sub"], wraplength=470)
             self.caption.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 12))
 
-            panel = ctk.CTkFrame(body, width=320, fg_color=C["surface"], border_color=C["line"], border_width=1, corner_radius=12)
+            panel = ctk.CTkFrame(body, width=UI_LAYOUT["panel_width"], fg_color=C["surface"], border_color=C["line"], border_width=1, corner_radius=12)
             panel.grid(row=0, column=1, sticky="nsew")
             panel.grid_propagate(False)
             panel.grid_columnconfigure(0, weight=1)
             panel.grid_rowconfigure(1, weight=1)
             summary = ctk.CTkFrame(panel, fg_color="transparent")
-            summary.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 0))
+            summary.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 0))
             self.summary_panel = summary
             self.state_icon = ctk.CTkFrame(summary, width=210, height=108, fg_color="transparent")
-            self.state_icon.pack(pady=(0, 6))
+            self.state_icon.pack(pady=(0, 10))
             self.state_icon.pack_propagate(False)
             self.gauge_arc = self.label(self.state_icon, "", width=210, height=108)
             self.gauge_arc.place(x=0, y=0)
@@ -7083,10 +6997,10 @@ def launch_gui():
             self.gauge_value.place(relx=.5, y=64, anchor="center")
             self.gauge_caption = self.label(self.state_icon, "처리 상태", 10, color=C["sub"], height=16)
             self.gauge_caption.place(relx=.5, y=91, anchor="center")
-            self.state_title = self.label(summary, "", 18, True, justify="center", wraplength=282)
+            self.state_title = self.label(summary, "", 18, True, justify="center", wraplength=320)
             self.state_title.pack(fill="x")
-            self.state_detail = self.label(summary, "", 12, color=C["sub"], justify="center", wraplength=280)
-            self.state_detail.pack(fill="x", pady=(6, 0))
+            self.state_detail = Paragraph(summary, "", size=12, color=C["sub"], justify="center", wraplength=320)
+            self.state_detail.pack(fill="x", pady=(8, 0))
 
             self.idle_intro = ctk.CTkFrame(panel, fg_color="transparent")
             self.idle_intro.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=20, pady=(24, 0))
@@ -7101,35 +7015,42 @@ def launch_gui():
                     row=row, column=0, sticky="n", padx=(0, 8), pady=(6, 0))
                 self.label(feature_list, text, 12, color=C["sub"], anchor="w",
                     justify="left", wraplength=248).grid(row=row, column=1, sticky="ew", pady=(0, 8))
+            self.button(self.idle_intro, "이미지 선택", self._pick, primary=True).pack(fill="x", pady=(24, 0))
 
-            evidence = ctk.CTkScrollableFrame(panel, width=268, height=160,
+            evidence_area = ctk.CTkFrame(panel, fg_color="transparent")
+            self.evidence_area = evidence_area
+            evidence_area.grid(row=1, column=0, sticky="nsew", padx=(20, 12), pady=(20, 0))
+            evidence_area.grid_columnconfigure(0, weight=1)
+            evidence_area.grid_rowconfigure(1, weight=1)
+            evidence = ctk.CTkScrollableFrame(evidence_area, width=300, height=160,
                 fg_color=C["surface"], corner_radius=0, border_width=0,
                 scrollbar_fg_color=C["surface"], scrollbar_button_color=C["line"],
                 scrollbar_button_hover_color="#C7CDD6")
-            evidence.grid(row=1, column=0, sticky="nsew", padx=(16, 8), pady=(12, 0))
+            evidence.grid(row=1, column=0, sticky="nsew")
             self.evidence_scroll = evidence
             evidence.grid_columnconfigure(0, weight=1)
-            evidence_header = ctk.CTkFrame(evidence, fg_color="transparent")
-            evidence_header.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-            self.evidence_title = self.label(evidence_header, "처리 안내", 11, True,
+            evidence_header = ctk.CTkFrame(evidence_area, fg_color="transparent")
+            evidence_header.grid(row=0, column=0, sticky="ew", padx=(0, 8), pady=(0, 10))
+            self.evidence_title = self.label(evidence_header, "검사 결과", 12, True,
                 color=C["sub"])
             self.evidence_title.pack(side="left")
-            self.info_button = self.button(evidence_header, "상세", self._show_info, width=42, height=20)
+            self.info_button = self.button(evidence_header, "상세", self._show_info, width=48, height=28)
             self.info_button.pack(side="right")
-            self.synthid_button = self.button(evidence_header, "SynthID 공식 검사", self._open_synthid, width=112, height=20)
+            self.synthid_button = self.button(evidence_header, "공식 검사", self._open_synthid, width=88, height=28)
             self.synthid_button.pack(side="right", padx=(0, 6))
             self.evidence_labels = {}
             self.evidence_cards = {}
             for row, key in enumerate(("synthid", "metadata", "open_watermark", "visible", "regeneration", "pixel"), 1):
-                card = ctk.CTkFrame(evidence, fg_color=C["soft"], corner_radius=8)
-                card.grid(row=row, column=0, sticky="ew", pady=(0, 6))
+                card = ctk.CTkFrame(evidence, fg_color=C["soft"], corner_radius=10)
+                card.grid(row=row, column=0, sticky="ew", pady=(0, UI_LAYOUT["card_gap"]))
                 card.grid_columnconfigure(0, weight=1)
-                heading = self.label(card, "", 10, color=C["sub"], anchor="w")
-                heading.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 0))
-                value = self.label(card, "", 13, True, anchor="w", justify="left", wraplength=244)
-                value.grid(row=1, column=0, sticky="ew", padx=12)
-                detail = self.label(card, "", 10, color=C["sub"], anchor="w", justify="left", wraplength=244)
-                detail.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 8))
+                padding = UI_LAYOUT["card_padding"]
+                heading = self.label(card, "", 11, color=C["sub"], anchor="w")
+                heading.grid(row=0, column=0, sticky="ew", padx=padding, pady=(padding, 4))
+                value = self.label(card, "", 14, True, anchor="w", justify="left", wraplength=278)
+                value.grid(row=1, column=0, sticky="ew", padx=padding)
+                detail = Paragraph(card, "", size=12, color=C["sub"], wraplength=278)
+                detail.grid(row=2, column=0, sticky="ew", padx=padding, pady=(6, padding))
                 self.evidence_labels[key] = (heading, value, detail)
                 self.evidence_cards[key] = card
 
@@ -7138,7 +7059,8 @@ def launch_gui():
             self.file_summary.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 0))
             self.caption.grid(row=3, column=0, sticky="ew", padx=16, pady=(6, 12))
             actions = ctk.CTkFrame(panel, fg_color="transparent")
-            actions.grid(row=2, column=0, sticky="ew", padx=16, pady=(12, 16))
+            actions.grid(row=2, column=0, sticky="ew", padx=20, pady=(16, 20))
+            ctk.CTkFrame(actions, height=1, fg_color=C["line"]).pack(fill="x", pady=(0, 12))
             self.action_panel = actions
             self.small_status = self.label(actions, "", 10, color=C["sub"],
                 justify="center", wraplength=280)
@@ -7147,8 +7069,8 @@ def launch_gui():
             self.primary = self.button(actions, "이미지 선택", self._primary_action, primary=True, height=UI_ACTION_BUTTON_HEIGHT)
             self.primary.pack(fill="x")
             self.options_button = self.button(actions, "처리 옵션 · 기본", self._show_processing_options, height=UI_ACTION_BUTTON_HEIGHT)
-            self.options_button.pack(fill="x", pady=(6, 0))
-            self.secondary = self.button(actions, "다른 이미지", self._reset_and_pick, height=32)
+            self.options_button.pack(fill="x", pady=(8, 0))
+            self.secondary = self.button(actions, "다른 이미지", self._reset_and_pick, height=UI_ACTION_BUTTON_HEIGHT)
             self.error_details = self.button(actions, "오류 상세", self._show_info, height=28)
 
         def _show_processing_options(self):
@@ -7157,21 +7079,27 @@ def launch_gui():
                 return
             dialog = ctk.CTkToplevel(self)
             dialog.title("이미지 처리 옵션")
-            dialog.geometry("440x310")
+            dialog.geometry("480x400")
+            dialog.configure(fg_color=C["surface"])
             dialog.resizable(False, False)
             dialog.transient(self)
             self.after_idle(lambda: self._grab_setup(dialog))
             edge = tk.BooleanVar(dialog, self.processing_options["restore_mode"] == "edge")
             sharpen = tk.BooleanVar(dialog, self.processing_options["unsharp"] > 0)
-            self.label(dialog, "디테일 복원 옵션", 18, True).pack(anchor="w", padx=24, pady=(22, 16))
-            for title, variable in (("윤곽 보존 모드", edge), ("약한 선명화", sharpen)):
-                ctk.CTkCheckBox(dialog, text=title, variable=variable, font=(font_name, 14),
+            self.label(dialog, "이미지 처리 옵션", 20, True).pack(anchor="w", padx=24, pady=(24, 20))
+            for title, variable, description in (("윤곽 보존 모드", edge, "원본의 윤곽을 고려해 디테일을 복원합니다."),
+                                                  ("약한 선명화", sharpen, "복원한 이미지의 선명도를 조금 높입니다.")):
+                row = ctk.CTkFrame(dialog, fg_color=C["soft"], corner_radius=10)
+                row.pack(fill="x", padx=24, pady=(0, 10))
+                ctk.CTkCheckBox(row, text=title, variable=variable, font=(font_name, 14),
                     fg_color=C["ink"], hover_color=C["sub"], text_color=C["ink"]).pack(
-                        anchor="w", padx=24, pady=(0, 16))
-            self.label(dialog, "두 옵션을 함께 사용할 수 있습니다.\n윤곽·질감 조정과 워터마크 검출 결과는 별개입니다.",
-                12, color=C["sub"], justify="left", wraplength=390).pack(anchor="w", padx=24)
+                        anchor="w", padx=14, pady=(14, 6))
+                self.label(row, description, 12, color=C["sub"]).pack(anchor="w", padx=14, pady=(0, 14))
+            Paragraph(dialog, "두 옵션은 함께 사용할 수 있습니다.\n화질 조정이며 SynthID 제거를 보장하지 않습니다.",
+                size=12, color=C["sub"], wraplength=432).pack(fill="x", padx=24, pady=(4, 0))
             footer = ctk.CTkFrame(dialog, fg_color="transparent")
-            footer.pack(fill="x", padx=24, pady=(20, 20))
+            footer.pack(fill="x", padx=24, pady=(20, 24))
+            footer.grid_columnconfigure((0, 1), weight=1)
             def apply_options(process=False):
                 self.processing_options.update(
                     restore_mode="edge" if edge.get() else "gaussian",
@@ -7181,10 +7109,10 @@ def launch_gui():
                 dialog.destroy()
                 if process:
                     self._process()
-            self.button(footer, "설정 저장", apply_options, height=34).pack(side="left")
+            self.button(footer, "설정 저장", apply_options).grid(row=0, column=0, sticky="ew", padx=(0, 6))
             if self.input_path:
                 self.button(footer, "적용 후 처리", lambda: apply_options(True),
-                            primary=True, height=34).pack(side="right")
+                            primary=True).grid(row=0, column=1, sticky="ew", padx=(6, 0))
 
         def _set_small_status(self, text):
             self.small_status.configure(text=text)
@@ -7200,20 +7128,21 @@ def launch_gui():
             from tkinter import messagebox
             dialog = ctk.CTkToplevel(self)
             dialog.title("SynthID 공식 검사")
-            dialog.geometry("580x570")
+            dialog.geometry("600x500")
+            dialog.configure(fg_color=C["surface"])
             dialog.transient(self)
-            self.label(dialog, "제공사별 공식 검사", 18, True).pack(padx=20, pady=(20, 8))
-            self.label(dialog,
+            self.label(dialog, "SynthID 공식 검사", 20, True).pack(anchor="w", padx=24, pady=(24, 16))
+            Paragraph(dialog,
                 "원본과 저장한 처리본을 각각 검사해 주세요.\n"
                 "C2PA 메타데이터와 SynthID 픽셀 판정은 별개의 결과입니다.\n"
                 "페이지를 여는 것만으로 파일이 전송되지는 않습니다.",
-                12, justify="left", wraplength=530).pack(padx=20, pady=8)
+                size=12, justify="left", wraplength=552).pack(fill="x", padx=24, pady=(0, 16))
             for service in PROVENANCE_SERVICES.values():
                 self.button(dialog, service["name"] + " 열기 · " + service["scope"],
-                    lambda url=service["url"]: webbrowser.open(url, new=2), height=36).pack(fill="x", padx=20, pady=5)
-            status = self.label(dialog, "미검출은 AI로 생성되지 않았다는 뜻이 아닙니다.", 12,
-                justify="left", wraplength=530)
-            status.pack(fill="x", padx=20, pady=12)
+                    lambda url=service["url"]: webbrowser.open(url, new=2)).pack(fill="x", padx=24, pady=(0, 10))
+            status = Paragraph(dialog, "미검출은 AI로 생성되지 않았다는 뜻이 아닙니다.", size=12,
+                justify="left", wraplength=552)
+            status.pack(fill="x", padx=24, pady=(6, 20))
             responses = queue.Queue()
 
             def receive_result():
@@ -7232,11 +7161,7 @@ def launch_gui():
                 text = "OpenAI 공식 API 결과\n" + "\n".join(
                     name.upper() + " · " + labels[value["status"]] for name, value in result["signals"].items())
                 status.configure(text=text + "\nGoogle 검사 결과는 별도로 확인해 주세요.")
-                try:
-                    save_verification_record(result)
-                    self._reload_verification_records()
-                except (OSError, ValueError):
-                    status.configure(text=text + "\n검사 결과를 앱에 저장하지 못했습니다. JSON으로 보관해 주세요.")
+                self._apply_live_verification(result)
                 destination = filedialog.asksaveasfilename(parent=dialog, title="검사 결과 저장",
                     defaultextension=".json", initialfile="openai-verification.json",
                     filetypes=[("검사 결과", "*.json")])
@@ -7267,37 +7192,27 @@ def launch_gui():
                 threading.Thread(target=worker, daemon=True, name="unmark-provenance").start()
                 dialog.after(150, receive_result)
 
-            def import_record():
-                path = self.result_path if self.tabs.get() == "처리 후" else self.input_path
-                if not path:
-                    status.configure(text="먼저 검사 기록을 연결할 이미지를 첨부해 주세요.")
-                    return
-                report = filedialog.askopenfilename(parent=dialog, title="이 이미지의 검사 기록 가져오기",
-                    filetypes=[("검사 기록 JSON", "*.json")])
-                if not report:
-                    return
-                try:
-                    import_file_verification(path, report)
-                    self._reload_verification_records()
-                    status.configure(text="현재 이미지와 일치하는 기록을 연결했습니다.\n가져온 기록의 출처와 날짜가 본 화면에 표시됩니다.")
-                except (OSError, ValueError):
-                    status.configure(text="이 이미지와 일치하는 검사 기록을 읽지 못했습니다.\n파일 내용과 검사 기록 형식을 확인해 주세요.")
-
-            self.button(dialog, "현재 이미지의 검사 기록 가져오기", import_record, height=36).pack(
-                fill="x", padx=20, pady=(5, 10))
-            api_button = self.button(dialog, "선택한 이미지 OpenAI API 검사", run_api, height=36)
-            api_button.pack(fill="x", padx=20, pady=5)
+            api_button = self.button(dialog, "이미지를 선택해 OpenAI API 검사", run_api, primary=True)
+            api_button.pack(fill="x", padx=24, pady=(0, 12))
             if not os.environ.get("OPENAI_API_KEY", "").strip():
                 api_button.configure(state="disabled")
-                self.label(dialog, "앱 내 API 검사는 OPENAI_API_KEY 설정 시 사용할 수 있습니다.\n"
-                    "키가 없으면 위 공식 웹 검사를 이용해 주세요.", 11,
-                    color=C["sub"], wraplength=530).pack(padx=20, pady=5)
+                Paragraph(dialog, "API 키와 검사 권한이 있어야 앱 안에서 검사할 수 있습니다.\n"
+                    "현재는 위 공식 웹 검사를 이용해 주세요.", size=12,
+                    color=C["sub"], wraplength=552).pack(fill="x", padx=24, pady=(0, 24))
 
-        def _reload_verification_records(self):
-            # 원본과 결과의 해시를 각각 읽어 판정이 다른 파일로 전파되지 않게 합니다.
+        def _apply_live_verification(self, result):
+            # 해시는 실제 API 응답이 다른 이미지에 붙지 않게 확인할 때만 씁니다.
+            # 디스크의 과거 판정이나 미리 준비한 샘플 결과를 로드하지 않습니다.
+            import hashlib
             for scan, path in ((self.input_scan, self.input_path), (self.output_scan, self.result_path)):
                 if scan and path:
-                    scan["external_verification"] = file_verification_records(path)
+                    try:
+                        with open(path, "rb") as stream:
+                            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                        if digest == result.get("sha256"):
+                            scan["live_verification"] = result
+                    except OSError:
+                        continue
             self._set_state(self.phase)
 
         def _draw_icon(self, state, fraction=None):
@@ -7336,12 +7251,12 @@ def launch_gui():
                 secondary.configure(text=detail)
 
             synthid = _ui_synthid_evidence(scan)
-            synthid_labels = {"detected": "탐지됨", "not_detected": "연결된 검사에서 미검출", "not_tested": "공식 검사 필요", "error": "검사 오류 · 판정 불가"}
+            synthid_labels = {"detected": "탐지됨", "not_detected": "공식 API 검사에서 미검출", "not_tested": "미검사", "error": "검사 오류 · 판정 불가"}
             card("synthid", "SynthID · 외부 검사", synthid_labels[synthid["status"]], synthid["detail"],
                  C["red"] if synthid["status"] == "detected" else C["amber"] if synthid["status"] in ("error", "not_tested") else C["ink"])
-            self.info_button.configure(text="상세", width=42,
+            self.info_button.configure(text="상세", width=48,
                 state="normal" if scan or failure else "disabled")
-            self.evidence_title.configure(text="처리 후 확인" if after else "확인한 정보")
+            self.evidence_title.configure(text="처리 후 검사" if after else "검사 결과")
             if self.phase == "processing":
                 card("regeneration", "이미지 재생성", "처리 중", self.work_stage or "로컬 모델을 준비하고 있습니다.")
             elif failure and self.phase == "error":
@@ -7610,7 +7525,7 @@ def launch_gui():
 
         def _sync_idle_view(self):
             if not self.input_scan:
-                self.evidence_scroll.grid_remove()
+                self.evidence_area.grid_remove()
                 if self.phase in ("loading", "error"):
                     self.summary_panel.grid()
                     self.idle_intro.grid_remove()
@@ -7622,7 +7537,7 @@ def launch_gui():
             else:
                 self.idle_intro.grid_remove()
                 self.summary_panel.grid()
-                self.evidence_scroll.grid()
+                self.evidence_area.grid()
                 self.action_panel.grid()
 
         def _sync_setup_gate(self):
@@ -8408,7 +8323,9 @@ def launch_gui():
             dialog.grid_columnconfigure(0, weight=1)
             dialog.grid_rowconfigure(1, weight=1)
             self.label(dialog, title, 20, True).grid(row=0, column=0, sticky="w", padx=24, pady=(22, 14))
-            textbox = ctk.CTkTextbox(dialog, font=(font_name, 12), wrap="word",
+            textbox = ctk.CTkTextbox(dialog, font=(font_name, 13), wrap="word",
+                fg_color=C["soft"], text_color=C["ink"], corner_radius=10,
+                spacing1=2, spacing2=4, spacing3=6,
                 takefocus=True, exportselection=False, undo=False)
             textbox.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=24, pady=(0, 8))
             textbox.insert("1.0", content)

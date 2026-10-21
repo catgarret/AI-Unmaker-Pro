@@ -7,7 +7,6 @@ import sys
 import traceback
 import time
 from provenance import PROVENANCE_SERVICES, ProvenanceError, verify_openai_file
-from verification_records import file_verification_records
 
 
 
@@ -159,7 +158,6 @@ def app_scan_file(path):
     return {"app": app_identity(), "metadata": metadata,
             "metadata_observation": _app_metadata_observation(metadata), "visible": visible, "frequency": frequency,
             "open_watermarks": open_watermarks,
-            "external_verification": file_verification_records(path),
             "elapsed_seconds": round(time.perf_counter() - started, 4),
             "synthid": _app_synthid_observation(metadata)}
 
@@ -217,7 +215,6 @@ def app_process(input_path, output_path, options=None, progress_callback=None, c
         input_scan = {"metadata": initial["before"], "visible": input_visible,
                       "metadata_observation": _app_metadata_observation(initial["before"]),
                       "frequency": input_frequency, "open_watermarks": input_open,
-                      "external_verification": file_verification_records(snapshot),
                       "synthid": _app_synthid_observation(initial["before"])}
         current = prepared
         _app_cancel(cancel_event)
@@ -330,7 +327,6 @@ def app_process(input_path, output_path, options=None, progress_callback=None, c
         output_scan = {"metadata": final["after"], "visible": check, "frequency": frequency_after,
                        "metadata_observation": _app_metadata_observation(final["after"]),
                        "open_watermarks": open_after,
-                       "external_verification": file_verification_records(output),
                        "synthid": _app_synthid_observation(final["after"])}
         # This flag describes the selected local checks, never SynthID removal.
         verified = not (regeneration["processed"] or pixel_result["processed"]) and visible_result["status"] in ("not_requested", "no_watermark", "cleaned", "not_detected")

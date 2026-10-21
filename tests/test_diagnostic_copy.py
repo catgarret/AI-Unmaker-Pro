@@ -132,7 +132,7 @@ class App:
                      "ctk": SimpleNamespace(CTkToplevel=self.new_dialog, CTkTextbox=self.new_textbox),
                      "font_name": "Pretendard", "json": json,
                      "app_identity": lambda: {"app_version": "test", "frozen": False},
-                     "C": {"sub": "sub", "green": "green", "red": "red"}}
+                     "C": {"sub": "sub", "green": "green", "red": "red", "soft": "soft", "ink": "ink"}}
         self.window_system = window_system
         exec(compile(METHODS, str(ROOT / "desktop_ui.py"), "exec"), namespace)
         for name in ("_text_window", "_show_info", "_show_logs"):

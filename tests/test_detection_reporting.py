@@ -123,9 +123,9 @@ def processed_result(after, *, preservation=None):
 class DetectionReportingTests(unittest.TestCase):
     def test_official_positive_survives_save_and_stays_on_its_own_tab(self):
         before, after = report(), report()
-        before["external_verification"] = {"sha256": "a" * 64, "records": [{
-            "sha256": "a" * 64, "provider": "openai", "method": "official_web_observation",
-            "checked_at": "2026-10-21", "signals": {"synthid": {"status": "detected"}}}]}
+        before["live_verification"] = {
+            "sha256": "a" * 64, "provider": "openai", "method": "official_api",
+            "checked_at": "2026-10-21", "signals": {"synthid": {"status": "detected"}}}
         for state in ("ready", "done", "saved"):
             original = render_state(before, state, result=processed_result(after))
             self.assertEqual(original.drawn_icon, "detected")
@@ -134,7 +134,7 @@ class DetectionReportingTests(unittest.TestCase):
             self.assertNotIn("%", original.state_detail.values["text"])
         processed = render_state(before, "done", result=processed_result(after), after=after)
         self.assertEqual(processed.drawn_icon, "unverified")
-        after["external_verification"] = before["external_verification"]
+        after["live_verification"] = before["live_verification"]
         retained = render_state(before, "saved", result=processed_result(after), after=after)
         self.assertEqual(retained.drawn_icon, "detected")
 
@@ -233,7 +233,7 @@ class DetectionReportingTests(unittest.TestCase):
     def test_icc_only_does_not_become_a_removal_target(self):
         scan = report(metadata_present=("icc",))
         view = render_state(scan)
-        self.assertEqual(view.state_detail.values["text"], "로컬 검사를 마쳤습니다.\nSynthID 공식 검사 결과는 없습니다.")
+        self.assertEqual(view.state_detail.values["text"], "이 앱에는 로컬 SynthID 검출기가 없습니다.\n공식 검사를 진행해 주세요.")
         self.assertEqual(view.evidence_labels["metadata"][2].values["text"], "색상 프로필 유지")
 
     def test_missing_record_cannot_be_created_by_summary_categories(self):
@@ -282,9 +282,9 @@ class DetectionReportingTests(unittest.TestCase):
 
     def test_file_without_metadata_does_not_look_synthid_negative(self):
         view = render_state(report())
-        self.assertEqual(view.state_title.values["text"], "SynthID 검사 필요")
+        self.assertEqual(view.state_title.values["text"], "SynthID 미검사")
         self.assertEqual(view.state_detail.values["text"],
-                         "로컬 검사를 마쳤습니다.\nSynthID 공식 검사 결과는 없습니다.")
+                         "이 앱에는 로컬 SynthID 검출기가 없습니다.\n공식 검사를 진행해 주세요.")
         self.assertEqual(view.primary.values["text"], "이미지 처리")
         self.assertEqual(view.primary.values["state"], "normal")
 
