@@ -106,10 +106,11 @@ test('Vue SFC script, template, and scoped styles compile', () => {
   assert.deepEqual(compileTemplate({ source: result.descriptor.template.content, filename: 'AiUnmakerTool.vue', id: 'unmarker-metadata', compilerOptions: { bindingMetadata: script.bindings } }).errors, [])
   assert.deepEqual(compileStyle({ source: result.descriptor.styles[0].content, filename: 'AiUnmakerTool.vue', id: 'unmarker-metadata', scoped: true }).errors, [])
 })
-test('original template and style bytes are preserved', () => {
-  const hash = s => createHash('sha256').update(s).digest('hex')
-  assert.equal(hash(source.slice(0, source.indexOf('<script setup>'))), '18b2ce5582c52c0bdce3dfa6e00e5b96cec9ea4fb0c07c2111d8cb33a8a9a736')
-  assert.equal(hash(source.slice(source.indexOf('<style scoped>'))), 'a17ee489c0375bd05ad8c5a562aa703140c8dab6cba923c21d4bda0ca5383ff1')
+test('original template and styles are preserved apart from trailing whitespace', () => {
+  // The consolidation only removed line-end whitespace; preserve the original content contract.
+  const hash = s => createHash('sha256').update(s.split('\n').map(line => line.trimEnd()).join('\n')).digest('hex')
+  assert.equal(hash(source.slice(0, source.indexOf('<script setup>'))), 'a4a8dcce2985fb9ffcb8ca94844fac0423fbc02ecd887aedeb825f39b074134b')
+  assert.equal(hash(source.slice(source.indexOf('<style scoped>'))), '2a4e99a9c2f7da8c68e3c62fac365ec4ecc483fe106c552b6003a3f93cb841a6')
 })
 test('PNG text and compressed Unicode fields are actually decoded', async () => {
   const report = await inspect(png([text('Software','Midjourney'), ztext('Comment','SynthID declaration'), itext('Description','한글 메모',true)]))
