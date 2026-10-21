@@ -20,7 +20,7 @@ import sys
 
 APP_VERSION = "1.2.0"
 ENGINE_ID = "local-qwen-q4-detail-v3"
-RELEASE_ID = "2026-10-21.3"
+RELEASE_ID = "2026-10-21.4"
 
 # Leave CPU capacity for the desktop while a single image is being processed.
 for _thread_option in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",

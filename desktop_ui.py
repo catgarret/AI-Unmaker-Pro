@@ -319,7 +319,7 @@ def launch_gui():
                 self.dnd_error = detail
             prefix = "\n" if self.upload_icon_image else ""
             self.empty_preview_text = prefix + (
-                "이미지를 드래그 앤 드롭하거나 클릭해 이미지를 첨부하세요.\nPNG · JPG · WEBP"
+                "클릭해 이미지를 첨부하세요.\n드래그 앤 드롭도 가능합니다.\nPNG · JPG · WEBP"
                 if self.dnd_working else
                 "드래그 앤 드롭을 사용할 수 없습니다.\n클릭해 이미지를 첨부하세요.\nPNG · JPG · WEBP")
             self._sync_setup_gate()
@@ -465,7 +465,7 @@ def launch_gui():
             self.preview_area.bind("<Configure>", self._schedule_preview)
             self.upload_icon_image = self._icon_image("upload-simple", 44, C["sub"])
             self.empty_preview_text = ("\n" if self.upload_icon_image else "") + \
-                "이미지를 드래그 앤 드롭하거나 클릭해 이미지를 첨부하세요.\nPNG · JPG · WEBP"
+                "클릭해 이미지를 첨부하세요.\n드래그 앤 드롭도 가능합니다.\nPNG · JPG · WEBP"
             self.preview_label = self.label(self.preview_area,
                 self.empty_preview_text, 14, image=self.upload_icon_image or self.empty_preview_image, compound="top",
                 color=C["sub"], justify="center", wraplength=300, cursor="hand2")
@@ -569,7 +569,7 @@ def launch_gui():
             dialog.geometry("440x310")
             dialog.resizable(False, False)
             dialog.transient(self)
-            dialog.grab_set()
+            self.after_idle(lambda: self._grab_setup(dialog))
             edge = tk.BooleanVar(dialog, self.processing_options["restore_mode"] == "edge")
             sharpen = tk.BooleanVar(dialog, self.processing_options["unsharp"] > 0)
             self.label(dialog, "디테일 복원 옵션", 18, True).pack(anchor="w", padx=24, pady=(22, 16))
