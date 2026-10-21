@@ -20,7 +20,7 @@ import sys
 
 APP_VERSION = "1.2.0"
 ENGINE_ID = "local-qwen-q4-detail-v3"
-RELEASE_ID = "2026-10-21.4"
+RELEASE_ID = "2026-10-21.5"
 
 # Leave CPU capacity for the desktop while a single image is being processed.
 for _thread_option in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
@@ -6375,6 +6375,16 @@ def app_restart_after_setup():
 
 # desktop_ui.py
 # ------------------------------------------------------------------------
+# 첨부 안내와 확장자를 분리해 문구 변경이 줄 간격에 영향을 주지 않게 합니다.
+UI_UPLOAD_FORMATS = "PNG · JPG · WEBP"
+UI_UPLOAD_FORMAT_GAP = 10
+
+
+def _ui_upload_prompt(dnd_available=True):
+    first = "이미지를 드래그 앤 드롭하거나" if dnd_available else "드래그 앤 드롭을 사용할 수 없습니다."
+    return first + "\n클릭해 이미지를 첨부하세요."
+
+
 def _normalise_dropped_image_path(tk_interpreter, data):
     """Read a single native TkDND file-list entry without rewriting its name."""
     import os
@@ -6695,10 +6705,7 @@ def launch_gui():
                 self.dnd_working = False
                 self.dnd_error = detail
             prefix = "\n" if self.upload_icon_image else ""
-            self.empty_preview_text = prefix + (
-                "클릭해 이미지를 첨부하세요.\n드래그 앤 드롭도 가능합니다.\nPNG · JPG · WEBP"
-                if self.dnd_working else
-                "드래그 앤 드롭을 사용할 수 없습니다.\n클릭해 이미지를 첨부하세요.\nPNG · JPG · WEBP")
+            self.empty_preview_text = prefix + _ui_upload_prompt(self.dnd_working)
             self._sync_setup_gate()
             return self.dnd_working
 
@@ -6805,6 +6812,10 @@ def launch_gui():
             self.preview_label.configure(image=display_image)
             self.preview_image = display_image
             self.preview_label.configure(text=text)
+            if text == self.empty_preview_text:
+                self.upload_formats.pack(pady=(UI_UPLOAD_FORMAT_GAP, 0))
+            else:
+                self.upload_formats.pack_forget()
 
         def _build(self):
             header = ctk.CTkFrame(self, fg_color="transparent")
@@ -6842,11 +6853,17 @@ def launch_gui():
             self.preview_area.bind("<Configure>", self._schedule_preview)
             self.upload_icon_image = self._icon_image("upload-simple", 44, C["sub"])
             self.empty_preview_text = ("\n" if self.upload_icon_image else "") + \
-                "클릭해 이미지를 첨부하세요.\n드래그 앤 드롭도 가능합니다.\nPNG · JPG · WEBP"
-            self.preview_label = self.label(self.preview_area,
+                _ui_upload_prompt()
+            self.preview_content = ctk.CTkFrame(self.preview_area, fg_color="transparent", corner_radius=0)
+            self.preview_content.place(relx=.5, rely=.5, anchor="center")
+            self.preview_label = self.label(self.preview_content,
                 self.empty_preview_text, 14, image=self.upload_icon_image or self.empty_preview_image, compound="top",
-                color=C["sub"], justify="center", wraplength=300, cursor="hand2")
-            self.preview_label.place(relx=.5, rely=.5, anchor="center")
+                color=C["sub"], justify="center", wraplength=0, cursor="hand2")
+            self.preview_label.pack()
+            self.upload_formats = self.label(self.preview_content, UI_UPLOAD_FORMATS, 14,
+                                             color=C["sub"], cursor="hand2")
+            self.upload_formats.pack(pady=(UI_UPLOAD_FORMAT_GAP, 0))
+            self.upload_formats.bind("<Button-1>", lambda _event: self._pick() if not self.input_path else None)
             self.preview_label.bind("<Button-1>", lambda _event: self._pick() if not self.input_path else None)
             self.preview_area.bind("<Button-1>", lambda _event: self._pick() if not self.input_path else None)
             self.caption = self.label(preview, "원본 파일은 그대로 보관됩니다.", 11, color=C["sub"], wraplength=470)
@@ -7396,7 +7413,7 @@ def launch_gui():
                 self.state_detail.configure(text="모델과 실행 구성요소 준비가 끝나면\n이미지를 선택할 수 있습니다.")
                 self.secondary.configure(state="disabled")
                 if not self.input_path:
-                    self.preview_label.configure(text="사용 준비가 끝나면\n이미지를 선택할 수 있습니다.")
+                    self._set_preview_content(image=self.upload_icon_image, text="사용 준비가 끝나면\n이미지를 선택할 수 있습니다.")
             elif not self.input_path and self.phase == "idle":
                 self._set_preview_content(image=self.upload_icon_image, text=self.empty_preview_text)
             elif not self.input_path and self.phase == "error":
