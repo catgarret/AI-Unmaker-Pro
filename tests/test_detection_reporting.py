@@ -27,8 +27,10 @@ notice_node = next(node for node in ui_class.body
                   if isinstance(node, ast.FunctionDef) and node.name == "_result_notice")
 refresh_tree = ast.Module(body=[refresh_node, state_node, notice_node], type_ignores=[])
 namespace = {"re": re, "math": math, "Path": Path,
-             "C": {"ink": "ink", "amber": "amber", "green": "green"},
+             "C": {"ink": "ink", "amber": "amber", "green": "green", "red": "red"},
              "_ui_metadata_evidence": ui._ui_metadata_evidence,
+             "_ui_synthid_evidence": ui._ui_synthid_evidence,
+             "_ui_detection_summary": ui._ui_detection_summary,
              "_ui_compact_evidence": ui._ui_compact_evidence}
 exec(compile(refresh_tree, str(ROOT / "desktop_ui.py"), "exec"), namespace)
 refresh_evidence = namespace["_refresh_evidence"]
@@ -75,7 +77,7 @@ def report(*, c2pa="not_detected", metadata_present=(), public="not_detected"):
 
 
 def render(before, after=None):
-    keys = ("regeneration", "pixel", "metadata", "open_watermark", "visible")
+    keys = ("synthid", "regeneration", "pixel", "metadata", "open_watermark", "visible")
     view = SimpleNamespace(
         tabs=SimpleNamespace(get=lambda: "처리 후" if after else "원본"),
         input_scan=before, output_scan=after, result=None, last_error=None,
@@ -119,6 +121,23 @@ def processed_result(after, *, preservation=None):
 
 
 class DetectionReportingTests(unittest.TestCase):
+    def test_official_positive_survives_save_and_stays_on_its_own_tab(self):
+        before, after = report(), report()
+        before["external_verification"] = {"sha256": "a" * 64, "records": [{
+            "sha256": "a" * 64, "provider": "openai", "method": "official_web_observation",
+            "checked_at": "2026-10-21", "signals": {"synthid": {"status": "detected"}}}]}
+        for state in ("ready", "done", "saved"):
+            original = render_state(before, state, result=processed_result(after))
+            self.assertEqual(original.drawn_icon, "detected")
+            self.assertEqual(original.state_title.values["text"], "SynthID 탐지됨")
+            self.assertEqual(original.evidence_labels["synthid"][1].values["text_color"], "red")
+            self.assertNotIn("%", original.state_detail.values["text"])
+        processed = render_state(before, "done", result=processed_result(after), after=after)
+        self.assertEqual(processed.drawn_icon, "unverified")
+        after["external_verification"] = before["external_verification"]
+        retained = render_state(before, "saved", result=processed_result(after), after=after)
+        self.assertEqual(retained.drawn_icon, "detected")
+
     def test_c2pa_cannot_hide_behind_other_metadata_count(self):
         scan = report(c2pa="detected", metadata_present=("exif", "xmp", "text", "c2pa", "jumbf"))
         view = render(scan)
@@ -183,13 +202,13 @@ class DetectionReportingTests(unittest.TestCase):
     def test_metadata_positive_reaches_existing_summary_without_ai_probability(self):
         scan = report(c2pa="detected", metadata_present=("c2pa", "exif", "xmp", "jumbf", "other"))
         view = render_state(scan)
-        self.assertEqual(view.state_title.values["text"], "이미지 확인 완료")
+        self.assertEqual(view.state_title.values["text"], "메타데이터 탐지됨")
         self.assertEqual(view.primary.values["text"], "이미지 처리")
         detail = view.state_detail.values["text"]
         self.assertIn("메타데이터 · C2PA · EXIF · XMP", detail)
         self.assertNotIn("한 번에 실행합니다", detail)
         self.assertNotIn("%", detail)
-        self.assertEqual(view.drawn_icon, "ready")
+        self.assertEqual(view.drawn_icon, "detected")
 
     def test_primary_recorded_app_is_not_hidden_behind_editor_exif(self):
         scan = report(c2pa="detected", metadata_present=("c2pa", "exif", "xmp"))
@@ -214,7 +233,7 @@ class DetectionReportingTests(unittest.TestCase):
     def test_icc_only_does_not_become_a_removal_target(self):
         scan = report(metadata_present=("icc",))
         view = render_state(scan)
-        self.assertEqual(view.state_detail.values["text"], "메타데이터 · 삭제 대상 정보 없음\nSynthID · 검사 안 됨")
+        self.assertEqual(view.state_detail.values["text"], "로컬 검사를 마쳤습니다.\nSynthID 공식 검사 결과는 없습니다.")
         self.assertEqual(view.evidence_labels["metadata"][2].values["text"], "색상 프로필 유지")
 
     def test_missing_record_cannot_be_created_by_summary_categories(self):
@@ -225,10 +244,10 @@ class DetectionReportingTests(unittest.TestCase):
     def test_incomplete_scan_preserves_positive_file_evidence_and_review_state(self):
         scan = report(c2pa="unavailable", metadata_present=("c2pa", "exif"))
         view = render_state(scan)
-        self.assertEqual(view.state_title.values["text"], "일부 검사가 필요합니다")
+        self.assertEqual(view.state_title.values["text"], "메타데이터 탐지됨")
         self.assertIn("C2PA · EXIF", view.state_detail.values["text"])
         self.assertIn("상세에서 검사 내용을 확인해 주세요.", view.state_detail.values["text"])
-        self.assertEqual(view.drawn_icon, "review")
+        self.assertEqual(view.drawn_icon, "detected")
         self.assertNotIn("삭제 대상 정보 없음", view.state_detail.values["text"])
 
     def test_supported_metadata_parser_failure_is_not_a_negative_summary(self):
@@ -246,7 +265,7 @@ class DetectionReportingTests(unittest.TestCase):
         self.assertIn("메타데이터 · SynthID · C2PA", view.state_detail.values["text"])
         self.assertNotIn("100", view.state_detail.values["text"])
         self.assertTrue(view.evidence_cards["open_watermark"].visible)
-        self.assertIn("SynthID 픽셀 신호는 검사하지 않았습니다.",
+        self.assertIn("이 공개 코덱 검사는 SynthID 판정과 별개입니다.",
                       view.evidence_labels["open_watermark"][2].values["text"])
 
     def test_negative_public_result_keeps_its_scope_visible(self):
@@ -258,14 +277,14 @@ class DetectionReportingTests(unittest.TestCase):
                              "공개 비가시 워터마크")
             self.assertEqual(view.evidence_labels["open_watermark"][1].values["text"],
                              "등록된 공개 패턴과 불일치")
-            self.assertIn("SynthID 픽셀", view.evidence_labels["open_watermark"][2].values["text"])
+            self.assertIn("SynthID 판정", view.evidence_labels["open_watermark"][2].values["text"])
             self.assertNotIn("재검사에서 검출되지 않음", view.evidence_labels["open_watermark"][1].values["text"])
 
     def test_file_without_metadata_does_not_look_synthid_negative(self):
         view = render_state(report())
-        self.assertEqual(view.state_title.values["text"], "이미지 확인 완료")
+        self.assertEqual(view.state_title.values["text"], "SynthID 검사 필요")
         self.assertEqual(view.state_detail.values["text"],
-                         "메타데이터 · 삭제 대상 정보 없음\nSynthID · 검사 안 됨")
+                         "로컬 검사를 마쳤습니다.\nSynthID 공식 검사 결과는 없습니다.")
         self.assertEqual(view.primary.values["text"], "이미지 처리")
         self.assertEqual(view.primary.values["state"], "normal")
 
@@ -285,12 +304,12 @@ class DetectionReportingTests(unittest.TestCase):
         for state in ("done", "saved"):
             with self.subTest(state=state):
                 view = render_state(before, state, result=result, after=after)
-                self.assertEqual(view.drawn_icon, "review")
+                self.assertEqual(view.drawn_icon, "detected")
                 self.assertIn("공개 비가시 워터마크", view.state_detail.values["text"])
                 self.assertIn("출력에서 다시 검출됐습니다.", view.state_detail.values["text"])
                 self.assertNotIn("처리와 재검사를 마쳤습니다", view.state_detail.values["text"])
                 if state == "done":
-                    self.assertEqual(view.state_title.values["text"], "결과 확인이 필요합니다")
+                    self.assertEqual(view.state_title.values["text"], "워터마크 탐지됨")
 
     def test_public_output_check_failure_cannot_look_like_success(self):
         for status in ("error", "unavailable", "unsupported", "insufficient_data"):
@@ -329,13 +348,13 @@ class DetectionReportingTests(unittest.TestCase):
         for state in ("done", "saved"):
             with self.subTest(state=state):
                 view = render_state(report(), state, result=result, after=after)
-                self.assertEqual(view.drawn_icon, state)
+                self.assertEqual(view.drawn_icon, "unverified")
                 self.assertEqual(result_notice(view), "")
 
     def test_passed_preservation_check_does_not_override_other_good_results(self):
         after = report()
         view = render_state(report(), "done", result=processed_result(after, preservation={"status": "passed"}), after=after)
-        self.assertEqual(view.drawn_icon, "done")
+        self.assertEqual(view.drawn_icon, "unverified")
         self.assertEqual(result_notice(view), "")
 
     def test_generic_detected_flags_are_not_watermark_or_quality_failures(self):
@@ -346,13 +365,13 @@ class DetectionReportingTests(unittest.TestCase):
         after["synthid"] = {"status": "metadata_declared", "metadata_declared": True,
                             "detected": None, "pixel_detection_supported": False}
         view = render_state(report(), "done", result=processed_result(after), after=after)
-        self.assertEqual(view.drawn_icon, "done")
+        self.assertEqual(view.drawn_icon, "unverified")
         self.assertEqual(result_notice(view), "")
 
     def test_positive_input_with_negative_public_output_is_not_reported_as_retained(self):
         before, after = report(public="detected"), report(public="not_detected")
         view = render_state(before, "done", result=processed_result(after), after=after)
-        self.assertEqual(view.drawn_icon, "done")
+        self.assertEqual(view.drawn_icon, "unverified")
         self.assertEqual(result_notice(view), "")
         self.assertEqual(view.evidence_labels["open_watermark"][1].values["text"], "재검사에서 검출되지 않음")
 

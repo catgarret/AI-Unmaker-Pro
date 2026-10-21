@@ -12,6 +12,7 @@ from pathlib import Path
 import secrets
 import ssl
 import stat
+from datetime import datetime, timezone
 
 
 PROVENANCE_SERVICES = {
@@ -121,5 +122,6 @@ def verify_openai_file(path, *, allow_upload=False):
         raise ProvenanceError("검사 서버의 응답을 읽지 못했습니다.") from None
     return {"provider": "openai", "method": "official_api", "scope": "openai_content",
             "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
             "signals": _provenance_signals(payload),
             "detail": "미검출은 AI로 생성되지 않았다는 뜻이 아닙니다. Google 검사는 별도로 수행하십시오."}
