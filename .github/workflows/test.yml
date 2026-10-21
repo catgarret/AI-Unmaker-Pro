@@ -1,0 +1,36 @@
+name: Test
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install runtime and test tools
+        run: python -m pip install -r requirements.txt pytest
+      - name: Verify generated entry point
+        run: |
+          python assemble_main.py
+          git diff --exit-code -- main.py
+      - name: Run offline regression tests
+        run: xvfb-run -a python -m pytest tests -q
+      - name: Check build configuration
+        run: python build.py --dry-run
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Test browser metadata component
+        working-directory: web
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm test

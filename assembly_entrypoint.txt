@@ -1,0 +1,24 @@
+
+if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
+    try:
+        app_cli_main()
+    except KeyboardInterrupt:
+        print("작업을 중단했습니다.", file=sys.stderr)
+        raise SystemExit(130)
+    except Exception as exc:
+        crash_log = app_write_crash(exc)
+        message = f"{type(exc).__name__}: {exc}\n\n오류 기록: {crash_log}"
+        print(message, file=sys.stderr)
+        if len(sys.argv) == 1:
+            try:
+                import tkinter as tk
+                from tkinter import messagebox
+                root = tk.Tk()
+                root.withdraw()
+                messagebox.showerror("AI Unmarker Pro 실행 오류", message, parent=root)
+                root.destroy()
+            except Exception:
+                pass
+        raise SystemExit(1)

@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""AI Unmarker Pro v1.1.0: unified local processing and official verification.
+
+Run: python main.py
+Build: python build.py
+The image pipeline uses quantized Qwen-Image-2512 with Lightning, then
+restores fine detail from the original image using the DeSynth method.
+Weights are downloaded on first setup and never bundled in the application.
+Public DWT-DCT payload decoding and FFT measurements are separate checks;
+neither is a SynthID detector. Every output is reopened and measured again.
+Local processing does not upload images. Optional official OpenAI verification
+requires an API key and explicit upload consent; Google uses its official site.
+See README.md for installation, supported checks, and measured verification.
+"""
+from __future__ import annotations
+
+import os
+import sys
+
+APP_VERSION = "1.1.0"
+ENGINE_ID = "local-qwen-q4-reference-v2"
+RELEASE_ID = "2026-10-21.2"
+
+# Leave CPU capacity for the desktop while a single image is being processed.
+for _thread_option in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+                       "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    os.environ[_thread_option] = "2"
+
+# PyInstaller's windowed bootloader can leave these streams unset. Libraries
+# such as tqdm/logging still expect writable streams while fetching models.
+if getattr(sys, "frozen", False):
+    for _stream_name in ("stdout", "stderr"):
+        if getattr(sys, _stream_name, None) is None:
+            setattr(sys, _stream_name, open(os.devnull, "w", encoding="utf-8"))

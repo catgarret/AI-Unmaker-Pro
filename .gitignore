@@ -1,34 +1,41 @@
-### 2. `.gitignore`
-
-```gitignore
-# 대용량 모델 가중치 (GitHub 100MB 업로드 제한 방지)
+# Python and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+env/
+# Local build outputs
+build/
+dist/
+*.spec
+# Models, caches and credentials
+models/
+*.gguf
 *.pth
 *.pt
 *.bin
 *.onnx
 *.safetensors
-
-# 파이썬 캐시 및 가상환경
-__pycache__/
-*.py[cod]
-*$py.class
-.venv/
-venv/
-env/
-
-# 임시 생성 파일 및 로그
-.ai_unmaker_stage1.png
-.ai_unmaker_final.png
+.ai_unmarker_cache/
+.ai_unmarker/
+.env
+.env.*
+!.env.example
+# Private samples and machine-specific diagnostics
+sample/
+Sample/
+validation/
+local-results/
 *.log
-
-# PyInstaller 빌드 결과물
-build/
-dist/
-*.spec
-release_pkg/
-AI-Unmarker-Pro-Windows-x64.zip
-AI-Unmarker-Pro-macOS.zip
-
-# OS 메타데이터
+# Web dependencies
+node_modules/
+# Operating systems / editors
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
 Thumbs.db
+Desktop.ini
+.vscode/
+.idea/

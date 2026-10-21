@@ -1,0 +1,31 @@
+# AI Unmarker Pro v1.1.0 — local Qwen GGUF + Lightning + detail restoration.
+# python3 build.py installs these packages automatically in its private build environment.
+# Trained model weights are downloaded on first setup and never bundled.
+customtkinter>=5.2.2,<6
+tkinterdnd2==0.6.4
+Pillow>=10.4,<13
+numpy>=1.26,<3
+PyWavelets>=1.8,<2
+opencv-python-headless>=4.8,<5
+remove-ai-watermarks[visible,detect]==0.46.0
+c2pa-python==0.38.0
+packaging>=24,<27
+requests>=2.32,<3
+truststore>=0.10,<1
+certifi>=2024.7.4
+tqdm>=4.66,<5
+psutil>=5.9,<8
+torch>=2.6,<3
+torchvision>=0.21,<1
+diffusers==0.36.0
+peft==0.18.0
+gguf==0.17.1
+transformers>=4.51,<5
+huggingface-hub>=0.34,<1
+accelerate>=1.2,<2
+safetensors>=0.4.5,<1
+regex>=2024.5.15
+filelock>=3.15,<4
+PyYAML>=6.0,<7
+pyinstaller>=6.14,<7
+pip>=25.2,<27

@@ -1,95 +1,52 @@
 name: Build and Release
-
 on:
   push:
-    branches:
-      - main
-    tags:
-      - 'v*'
+    tags: ['v*']
   workflow_dispatch:
-
 permissions:
-  contents: write
-
+  contents: read
 jobs:
   build:
-    name: Build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            artifact_name: AI-Unmarker-Pro-Windows-x64
-            zip_file: AI-Unmarker-Pro-Windows-x64.zip
-          - os: macos-latest
-            artifact_name: AI-Unmarker-Pro-macOS
-            zip_file: AI-Unmarker-Pro-macOS.zip
-
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-
-      - name: Install dependencies
+          python-version: '3.12'
+      - name: Assemble and build using the project builder
         run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller customtkinter tkinterdnd2 Pillow numpy
-
-      # Windows 빌드 (.exe)
-      - name: Build for Windows
-        if: runner.os == 'Windows'
-        run: |
-          pyinstaller --noconfirm --noconsole --onefile --icon=icons/icon.ico --name "AI-Unmarker-Pro" --add-data "fonts;fonts" --add-data "icons;icons" --collect-all customtkinter --collect-all tkinterdnd2 main.py
-          python -c "import os, shutil; os.makedirs('release_pkg', exist_ok=True); shutil.copy('dist/AI-Unmarker-Pro.exe', 'release_pkg/'); [shutil.copytree(f, os.path.join('release_pkg', f), dirs_exist_ok=True) for f in ['fonts', 'icons'] if os.path.isdir(f)]; shutil.make_archive('AI-Unmarker-Pro-Windows-x64', 'zip', 'release_pkg')"
-
-      # macOS 빌드 (.app)
-      - name: Build for macOS
+          python assemble_main.py
+          python build.py
+      - name: Archive macOS application with permissions
         if: runner.os == 'macOS'
-        run: |
-          python -c "from PIL import Image; Image.open('icons/icon.png').save('icons/icon.icns', format='ICNS')"
-          pyinstaller --noconfirm --noconsole --windowed --icon=icons/icon.icns --name "AI Unmarker Pro" --add-data "fonts:fonts" --add-data "icons:icons" --collect-all customtkinter --collect-all tkinterdnd2 main.py
-          mkdir -p release_pkg
-          cp -R "dist/AI Unmarker Pro.app" release_pkg/
-          [ -d "fonts" ] && cp -R fonts release_pkg/
-          [ -d "icons" ] && cp -R icons release_pkg/
-          cd release_pkg
-          zip -r -y ../AI-Unmarker-Pro-macOS.zip .
-          cd ..
-
-      - name: Upload Build Artifact
-        uses: actions/upload-artifact@v4
+        run: ditto -c -k --sequesterRsrc --keepParent "dist/AI Unmarker Pro.app" AI-Unmarker-Pro-macOS.zip
+      - name: Archive Windows application
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/* -DestinationPath AI-Unmarker-Pro-Windows.zip
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.zip_file }}
-
+          name: AI-Unmarker-Pro-${{ matrix.os }}
+          path: AI-Unmarker-Pro-*.zip
+          if-no-files-found: error
   release:
-    name: Publish Release Assets
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
-          path: release_assets
-
-      - name: Create Release and Upload Assets
+          path: release-assets
+      - name: Publish tagged build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-        run: |
-          TAG_NAME="${GITHUB_REF_NAME}"
-          if [ "$TAG_NAME" = "main" ] || [ -z "$TAG_NAME" ]; then
-            TAG_NAME="v1.0.${{ github.run_number }}"
-          fi
-          
-          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release create "$TAG_NAME" release_assets/*.zip --title "AI Unmarker Pro $TAG_NAME" --notes "Windows 및 macOS 30MB 초경량 자동 배포 ($TAG_NAME)"
-          else
-            gh release upload "$TAG_NAME" release_assets/*.zip --clobber
-          fi
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" release-assets/*.zip --verify-tag --generate-notes

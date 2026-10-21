@@ -1,0 +1,12 @@
+{
+  "name": "ai-unmarker-web-metadata-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/detection.test.mjs"
+  },
+  "devDependencies": {
+    "@vue/compiler-sfc": "3.5.44",
+    "@xmldom/xmldom": "0.8.15"
+  }
+}
