@@ -278,6 +278,10 @@ def launch_gui():
             self.dnd_error = ""
             self.dnd_targets = {}
             self.gauge_image = None
+            self.processing_options = {
+                "restore_mode": DETAIL_RESTORE_POLICY["default_mode"],
+                "unsharp": DETAIL_RESTORE_POLICY["default_unsharp"],
+            }
             self._build()
             self._set_state("idle")
             if not self.app_identity["icon_applied"]:
@@ -315,9 +319,9 @@ def launch_gui():
                 self.dnd_error = detail
             prefix = "\n" if self.upload_icon_image else ""
             self.empty_preview_text = prefix + (
-                "이미지를 드래그 앤 드롭하거나 클릭해 선택하세요.\nPNG · JPG · WEBP"
+                "이미지를 드래그 앤 드롭하거나 클릭해 이미지를 첨부하세요.\nPNG · JPG · WEBP"
                 if self.dnd_working else
-                "드래그 앤 드롭을 사용할 수 없습니다.\n클릭해 이미지를 선택하세요.\nPNG · JPG · WEBP")
+                "드래그 앤 드롭을 사용할 수 없습니다.\n클릭해 이미지를 첨부하세요.\nPNG · JPG · WEBP")
             self._sync_setup_gate()
             return self.dnd_working
 
@@ -461,7 +465,7 @@ def launch_gui():
             self.preview_area.bind("<Configure>", self._schedule_preview)
             self.upload_icon_image = self._icon_image("upload-simple", 44, C["sub"])
             self.empty_preview_text = ("\n" if self.upload_icon_image else "") + \
-                "이미지를 드래그 앤 드롭하거나 클릭해 선택하세요.\nPNG · JPG · WEBP"
+                "이미지를 드래그 앤 드롭하거나 클릭해 이미지를 첨부하세요.\nPNG · JPG · WEBP"
             self.preview_label = self.label(self.preview_area,
                 self.empty_preview_text, 14, image=self.upload_icon_image or self.empty_preview_image, compound="top",
                 color=C["sub"], justify="center", wraplength=300, cursor="hand2")
@@ -551,8 +555,45 @@ def launch_gui():
                 progress_color=C["ink"], fg_color=C["soft"])
             self.primary = self.button(actions, "이미지 선택", self._primary_action, primary=True, height=40)
             self.primary.pack(fill="x")
+            self.options_button = self.button(actions, "처리 옵션 · 기본", self._show_processing_options, height=30)
+            self.options_button.pack(fill="x", pady=(6, 0))
             self.secondary = self.button(actions, "다른 이미지", self._reset_and_pick, height=32)
             self.error_details = self.button(actions, "오류 상세", self._show_info, height=28)
+
+        def _show_processing_options(self):
+            """옵션은 다음 처리에 적용하며 기존 결과는 명시적 재처리 전까지 유지합니다."""
+            if self.busy or not self.setup_ready:
+                return
+            dialog = ctk.CTkToplevel(self)
+            dialog.title("이미지 처리 옵션")
+            dialog.geometry("440x310")
+            dialog.resizable(False, False)
+            dialog.transient(self)
+            dialog.grab_set()
+            edge = tk.BooleanVar(dialog, self.processing_options["restore_mode"] == "edge")
+            sharpen = tk.BooleanVar(dialog, self.processing_options["unsharp"] > 0)
+            self.label(dialog, "디테일 복원 옵션", 18, True).pack(anchor="w", padx=24, pady=(22, 16))
+            for title, variable in (("윤곽 보존 모드", edge), ("약한 선명화", sharpen)):
+                ctk.CTkCheckBox(dialog, text=title, variable=variable, font=(font_name, 14),
+                    fg_color=C["ink"], hover_color=C["sub"], text_color=C["ink"]).pack(
+                        anchor="w", padx=24, pady=(0, 16))
+            self.label(dialog, "두 옵션을 함께 사용할 수 있습니다.\n윤곽·질감 조정과 워터마크 검출 결과는 별개입니다.",
+                12, color=C["sub"], justify="left", wraplength=390).pack(anchor="w", padx=24)
+            footer = ctk.CTkFrame(dialog, fg_color="transparent")
+            footer.pack(fill="x", padx=24, pady=(20, 20))
+            def apply_options(process=False):
+                self.processing_options.update(
+                    restore_mode="edge" if edge.get() else "gaussian",
+                    unsharp=DETAIL_RESTORE_POLICY["gentle_unsharp"] if sharpen.get() else 0.0)
+                labels = (["윤곽 보존"] if edge.get() else []) + (["약한 선명화"] if sharpen.get() else [])
+                self.options_button.configure(text="처리 옵션 · " + (" + ".join(labels) or "기본"))
+                dialog.destroy()
+                if process:
+                    self._process()
+            self.button(footer, "설정 저장", apply_options, height=34).pack(side="left")
+            if self.input_path:
+                self.button(footer, "적용 후 처리", lambda: apply_options(True),
+                            primary=True, height=34).pack(side="right")
 
         def _set_small_status(self, text):
             self.small_status.configure(text=text)
@@ -969,6 +1010,7 @@ def launch_gui():
             locked = not self.setup_ready or self.setup_busy
             self.tabs.configure(state="disabled" if locked or self.busy else "normal")
             self.change_button.configure(state="disabled" if locked or self.busy else "normal")
+            self.options_button.configure(state="disabled" if locked or self.busy else "normal")
             self.preview_label.configure(cursor="arrow" if locked else "hand2")
             if locked:
                 checking = self.setup_stage == "checking"
@@ -1543,6 +1585,7 @@ def launch_gui():
             cancel = self.cancel_event
             options = {"remove_visible": True, "pixel_process": False,
                 "regenerate": True, "preserve_color_profile": True}
+            options.update(self.processing_options)
             self._select_tab("원본")
             self._set_state("processing")
             stage = [self.work_stage]

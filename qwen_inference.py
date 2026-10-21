@@ -34,6 +34,10 @@ if "publish_new_file" not in globals():
     from file_publish import publish_new_file
 
 
+if "DETAIL_RESTORE_POLICY" not in globals():
+    from detail_restore import DETAIL_RESTORE_POLICY, restore_image_detail
+
+
 MODEL_EXECUTION_POLICY = {
     "engine": "desynth_qwen_gguf",
     "max_working_side": 1024,
@@ -52,8 +56,13 @@ MODEL_EXECUTION_POLICY = {
     "mps_environment_modified": False,
     "mps_per_process_memory_fraction": .9,
     "conditioning": "pinned_precomputed_embeddings",
-    "restore_sigma": 1.95,
 }
+# 빌드 도구는 위 메모리 제한을 실행 없이 검사합니다. 복원 기본값은 별도 명세에서 가져옵니다.
+MODEL_EXECUTION_POLICY.update(
+    restore_sigma=DETAIL_RESTORE_POLICY["default_sigma"],
+    restore_mode=DETAIL_RESTORE_POLICY["default_mode"],
+    unsharp=DETAIL_RESTORE_POLICY["default_unsharp"],
+)
 _QWEN_EMBEDS_SHA256 = "1d05bbe05797ed9ec1653e935ba257a016c017b50f0ba206394c04782da8cd4c"
 _QWEN_GGUF_FILENAME = MODEL_SPECS["qwen"]["files"][0]
 _QWEN_LORA_FILENAME = "Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors"
@@ -465,32 +474,13 @@ def _qwen_prepare_image(image, max_side):
     return Image.fromarray(padded), size
 
 
-def _qwen_restore_detail(clean, original, sigma, cancel_event=None):
-    """Gaussian(clean) + original - Gaussian(original), in bounded row strips."""
-    import cv2
-    import numpy as np
-    from PIL import Image
-    source = np.asarray(original.convert("RGB"))
-    cleaned = np.asarray(clean.convert("RGB"))
-    if clean.size != original.size:
-        cleaned = cv2.resize(cleaned, original.size, interpolation=cv2.INTER_LANCZOS4)
-    result = np.empty_like(source)
-    halo = math.ceil(sigma * 4) + 2
-    for top in range(0, original.height, 128):
-        _check_cancel(cancel_event)
-        bottom = min(original.height, top + 128)
-        start, stop = max(0, top - halo), min(original.height, bottom + halo)
-        first = source[start:stop].astype(np.float32)
-        second = cleaned[start:stop].astype(np.float32)
-        low_source = cv2.GaussianBlur(first, (0, 0), sigmaX=sigma, sigmaY=sigma)
-        low_clean = cv2.GaussianBlur(second, (0, 0), sigmaX=sigma, sigmaY=sigma)
-        band = np.clip(low_clean + (first - low_source), 0, 255)
-        if not np.isfinite(band).all():
-            raise ModelRuntimeError("이미지 복원 결과에 유효하지 않은 수치가 있습니다.")
-        # Match DeSynth's final float -> uint8 conversion. A different rounding
-        # rule changes most restored pixels even with identical model output.
-        result[top:bottom] = band[top - start:bottom - start].astype(np.uint8)
-    return Image.fromarray(result)
+def _qwen_restore_detail(clean, original, sigma, cancel_event=None, *, mode="gaussian", unsharp=0.0):
+    """순수 이미지 복원과 처리 중단·앱 오류 표시를 연결합니다."""
+    try:
+        return restore_image_detail(clean, original, sigma=sigma, mode=mode, unsharp=unsharp,
+                                    check_cancel=lambda: _check_cancel(cancel_event))
+    except ValueError as exc:
+        raise ModelRuntimeError(str(exc)) from exc
 
 
 def _qwen_compare_pixels(before, after):
@@ -571,7 +561,9 @@ def _qwen_options(options):
                                        if supplied.get("max_working_side") is not None else None),
                   "steps": int(supplied.get("steps", 8)), "strength": float(supplied.get("strength", .25)),
                   "lora_scale": float(supplied.get("lora_scale", .8)),
-                  "restore_sigma": float(supplied.get("restore_sigma", 1.95)),
+                  "restore_sigma": float(supplied.get("restore_sigma", DETAIL_RESTORE_POLICY["default_sigma"])),
+                  "restore_mode": supplied.get("restore_mode", DETAIL_RESTORE_POLICY["default_mode"]),
+                  "unsharp": float(supplied.get("unsharp", DETAIL_RESTORE_POLICY["default_unsharp"])),
                   "seed": (int(supplied["seed"]) if supplied.get("seed") is not None else secrets.randbits(63)),
                   "restore": supplied.get("restore", True)}
     except (ValueError, TypeError, OverflowError) as exc:
@@ -583,6 +575,11 @@ def _qwen_options(options):
             or not 0 < parsed["lora_scale"] <= 1.5 or not .1 <= parsed["restore_sigma"] <= 4
             or not 0 <= parsed["seed"] < 2 ** 63):
         raise ModelRuntimeError("Qwen 처리 설정 범위를 확인해주세요. 크기 256~1024, 강도 .125~.5, 단계 4~32를 지원합니다.")
+    if (parsed["restore_mode"] not in DETAIL_RESTORE_POLICY["modes"]
+            or not 0 <= parsed["unsharp"] <= DETAIL_RESTORE_POLICY["maximum_unsharp"]):
+        raise ModelRuntimeError("복원 모드는 gaussian 또는 edge, 선명화 강도는 0~1이어야 합니다.")
+    if not parsed["restore"] and (parsed["restore_mode"] != "gaussian" or parsed["unsharp"]):
+        raise ModelRuntimeError("윤곽 보존·선명화는 디테일 복원을 켠 상태에서 사용해 주세요.")
     return parsed
 
 
@@ -694,7 +691,8 @@ def regenerate_image(source_png, output_png, options=None, progress_callback=Non
     _emit_model_progress(progress_callback, {"phase": "detail_restore", "title": "이미지 디테일 복원 중",
                                             "detail": "원본의 형태·질감과 출력 크기를 복원합니다."})
     if settings["restore"]:
-        restored = _qwen_restore_detail(cleaned, rgb, settings["restore_sigma"], cancel_event)
+        restored = _qwen_restore_detail(cleaned, rgb, settings["restore_sigma"], cancel_event,
+                                        mode=settings["restore_mode"], unsharp=settings["unsharp"])
     else:
         # Keep output geometry consistent even when detail restoration is off.
         restored = Image.fromarray(cv2.resize(np.asarray(cleaned), rgb.size, interpolation=cv2.INTER_LANCZOS4))
@@ -729,14 +727,17 @@ def regenerate_image(source_png, output_png, options=None, progress_callback=Non
             "resize_mode": "pipeline_default" if not dimensions else "explicit_aspect_preserving_limit",
             "inference_calls": sample_count, "effective_denoising_steps": effective_steps,
             "transformer_blocks_completed": completed_blocks,
-            "detail_restore": {"performed": settings["restore"], "method": "gaussian_low_clean_high_original" if settings["restore"] else "none",
-                               "sigma": settings["restore_sigma"]},
+            "detail_restore": {"performed": settings["restore"], "method": ("edge_blended_frequency_restore" if settings["restore_mode"] == "edge"
+                                          else "gaussian_low_clean_high_original") if settings["restore"] else "none",
+                               "mode": settings["restore_mode"] if settings["restore"] else "none",
+                               "sigma": settings["restore_sigma"], "unsharp": settings["unsharp"],
+                               "sharpening_performed": bool(settings["restore"] and settings["unsharp"])},
             "mmap": mmap_report, "weights_loaded": True, "pixel_comparison": comparison,
             "preservation_check": _qwen_preservation_check(comparison),
             "output_path": str(target), "elapsed_seconds": round(time.monotonic() - started, 3),
             "peak_process_rss_bytes": _qwen_peak_rss_bytes(),
             "synthid": {"status": "not_tested", "removal_verified": False},
-            "detail": "이미지 처리 및 원본 디테일 복원 완료" if changed else "Qwen 실행 완료 · 출력 픽셀 변경 없음"}
+            "detail": ("이미지 처리 및 디테일 복원 완료" if settings["restore"] else "이미지 재생성 완료 · 디테일 복원 끔") if changed else "Qwen 실행 완료 · 출력 픽셀 변경 없음"}
 
 
 def _qwen_tiny_engine_probe(torch, dtype):

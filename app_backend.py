@@ -390,7 +390,11 @@ def app_cli_main():
     parser.add_argument("--steps", type=int, default=8)
     parser.add_argument("--max-working-side", type=int, default=None)
     parser.add_argument("--lora-scale", type=float, default=0.8)
-    parser.add_argument("--restore-sigma", type=float, default=1.95)
+    parser.add_argument("--restore-sigma", type=float, default=DETAIL_RESTORE_POLICY["default_sigma"])
+    parser.add_argument("--restore-mode", choices=DETAIL_RESTORE_POLICY["modes"],
+                        default=DETAIL_RESTORE_POLICY["default_mode"], help="gaussian: 기본 복원, edge: 윤곽 보존")
+    parser.add_argument("--unsharp", type=float, default=DETAIL_RESTORE_POLICY["default_unsharp"],
+                        help="복원 후 선명화 강도 0~1. 약한 선명화 권장값 0.2")
     parser.add_argument("--seed", type=int, default=None, help="재현용 시드. 생략하면 무작위 시드를 결과에 기록합니다.")
     parser.add_argument("--no-restore", action="store_true", help="원본 고주파 디테일을 다시 합치지 않습니다.")
     parser.add_argument("--remove-icc", action="store_true")
@@ -431,6 +435,7 @@ def app_cli_main():
             "device": args.device, "strength": args.strength, "steps": args.steps,
             **({"max_working_side": args.max_working_side} if args.max_working_side is not None else {}),
             "lora_scale": args.lora_scale, "restore_sigma": args.restore_sigma, "restore": not args.no_restore,
+            "restore_mode": args.restore_mode, "unsharp": args.unsharp,
             "seed": args.seed})
     else:
         launch_gui()

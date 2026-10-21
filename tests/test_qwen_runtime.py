@@ -211,6 +211,21 @@ class QwenRuntimeTests(unittest.TestCase):
             self.assertTrue(np.array_equal(actual[:, :, 3], pixels[:, :, 3]))
             self.assertTrue(np.array_equal(actual[pixels[:, :, 3] == 0], pixels[pixels[:, :, 3] == 0]))
 
+    def test_combined_detail_options_reach_output_and_keep_alpha_and_icc(self):
+        with tempfile.TemporaryDirectory() as directory, self.fake_runtime():
+            source, pixels = self.make_source(directory)
+            target = Path(directory) / "combined.png"
+            with mock.patch.object(q, "_qwen_restore_detail", wraps=q._qwen_restore_detail) as restore:
+                report = q.regenerate_image(source, target, {"device": "cpu", "restore_mode": "edge", "unsharp": .2})
+            self.assertEqual(restore.call_args.kwargs, {"mode": "edge", "unsharp": .2})
+            self.assertEqual(report["detail_restore"]["mode"], "edge")
+            self.assertTrue(report["detail_restore"]["sharpening_performed"])
+            self.assertEqual(report["parameters"]["unsharp"], .2)
+            self.assertEqual(report["synthid"]["status"], "not_tested")
+            with Image.open(target) as image:
+                self.assertEqual(image.info["icc_profile"], b"ICC-fixture-data")
+                np.testing.assert_array_equal(np.asarray(image)[:, :, 3], pixels[:, :, 3])
+
     def test_cancel_before_load_and_during_inference_never_publishes(self):
         with tempfile.TemporaryDirectory() as directory, self.fake_runtime() as calls:
             source, _ = self.make_source(directory)

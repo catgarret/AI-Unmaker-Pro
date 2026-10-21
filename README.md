@@ -4,7 +4,7 @@
 
 ## 현재 동작과 한계
 
-- 이미지 처리는 Qwen-Image-2512 Q4_K_M, Lightning, DeSynth의 Gaussian 디테일 복원 방식을 사용합니다.
+- 이미지 처리는 Qwen-Image-2512 Q4_K_M, Lightning, DeSynth의 기본·윤곽 보존 디테일 복원과 선택적 선명화를 사용합니다.
 - EXIF, XMP, C2PA와 등록된 공개 워터마크는 각각 검사합니다. 이 검사들은 SynthID 픽셀 검출기가 아닙니다.
 - **로컬 SynthID 픽셀 검출기는 없습니다.** `SynthID 공식 검사`에서 Google과 OpenAI의 공식 검사 페이지를 각각 열 수 있습니다. OpenAI API 키를 설정한 경우 앱에서도 실제 C2PA·SynthID 결과를 받을 수 있습니다. 외부 전송은 파일 선택과 동의 후에만 진행됩니다.
 - 처리 완료, 메타데이터 삭제, PSNR 수치는 SynthID 제거 성공을 의미하지 않습니다. 제거 여부를 검사하지 않은 결과는 계속 `not_tested`로 기록합니다.
@@ -59,12 +59,36 @@ python main.py --clean input.png --output metadata-only.png --metadata-only
 
 출력 파일은 기존 파일을 덮어쓰지 않습니다. 원본 크기, 투명도, 색상 프로필을 유지합니다. 이미지 재생성은 RGB 픽셀과 작은 글자·질감 등을 바꿀 수 있습니다.
 
+## 윤곽 보존·약한 선명화
+
+이미지를 첨부한 다음 **처리 옵션**을 누르십시오. 두 항목은 각각 또는 함께 선택할 수 있습니다. `설정 저장`은 다음 처리에 사용할 설정만 바꾸며, `적용 후 처리`는 현재 원본에서 다시 처리합니다. 이미 처리한 결과 위에 연속 적용하지 않습니다. 옵션은 현재 앱 실행 동안 유지됩니다.
+
+| 옵션 | 동작 | 기본값 |
+| --- | --- | --- |
+| 윤곽 보존 | 원본 윤곽 강도에 따라 서로 다른 폭의 디테일 복원을 혼합합니다. | 끔 |
+| 약한 선명화 | 복원 후 0.2 강도로 선명화하며 최종 픽셀 변환 전에 적용합니다. | 끔 |
+
+두 옵션은 화질 조정입니다. 원본 픽셀과의 차이가 줄거나 SynthID 검출이 사라진다는 보장은 없습니다. DeSynth 기본값과 기존 결과를 유지하도록 기본 복원 모드와 선명화 끔을 유지했습니다. 비교 기록은 [옵션 검증](docs/DETAIL-OPTIONS-2026-10-21.md)을 확인하십시오.
+
+```bash
+# 윤곽 보존만 적용
+python main.py --clean input.png --output edge.png --restore-mode edge --seed 42
+
+# 약한 선명화만 적용
+python main.py --clean input.png --output sharpened.png --unsharp 0.2 --seed 42
+
+# 두 옵션 함께 적용
+python main.py --clean input.png --output combined.png --restore-mode edge --unsharp 0.2 --seed 42
+```
+
+CLI의 `--unsharp`는 0~1을 지원합니다. `--no-restore`와 윤곽 보존·선명화를 함께 지정하면 무시하지 않고 오류로 알립니다. JSON의 `regeneration.parameters`와 `regeneration.detail_restore`에서 실제 적용 옵션을 확인하실 수 있습니다.
+
 ## 처리 흐름
 
 1. 원본의 임시 사본을 만들고 파일이 읽는 중 바뀌지 않았는지 확인합니다.
 2. 메타데이터와 공개 워터마크를 별도로 검사합니다.
 3. 선택된 가시 표식을 처리하고 Qwen 이미지 재생성을 실행합니다.
-4. 기본 설정에서는 재생성 이미지의 저주파와 원본의 고주파를 합칩니다.
+4. 재생성 이미지와 원본의 디테일을 복원하고, 선택한 경우 윤곽 혼합과 약한 선명화를 순서대로 적용합니다.
 5. 실제 저장된 PNG를 다시 열어 크기·투명도·메타데이터를 검사한 뒤 새 파일로 확정합니다.
 
 CPU라고 자동으로 512px로 낮추거나 Q2 모델로 바꾸지 않습니다. `--max-working-side`를 지정하면 비율 유지 축소 모드가 되며 DeSynth 기본 전처리와 달라집니다. 기본값은 고정된 Diffusers 파이프라인의 입력 변환을 그대로 사용합니다.
@@ -75,7 +99,8 @@ CPU라고 자동으로 512px로 낮추거나 Q2 모델로 바꾸지 않습니다
 | --- | --- |
 | `app_backend.py` | 검사와 처리 전체 흐름, CLI, 결과 JSON |
 | `provenance.py` | 공식 검사 서비스 명세, 동의가 필요한 OpenAI API 연결과 응답 해석 |
-| `qwen_inference.py` | Qwen 로딩, 메모리 관리, 추론, 디테일 복원 |
+| `qwen_inference.py` | Qwen 로딩, 메모리 관리, 추론, 복원 연결 |
+| `detail_restore.py` | 복원 정책의 단일 명세, 윤곽별 혼합, 선명화, 행 단위 메모리 제한 |
 | `model_runtime.py` | 모델 명세, 고정 해시, HTTPS 다운로드·이어받기·캐시 검증 |
 | `metadata_core.py` | PNG/JPEG/WebP 메타데이터·C2PA 읽기와 삭제 |
 | `open_watermark_bridge.py`, `visible_bridge.py` | 공개 워터마크와 가시 표식 검사 연결 |

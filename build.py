@@ -51,9 +51,9 @@ import uuid
 
 
 APP_NAME = "AI Unmarker Pro"
-APP_VERSION = "1.1.0"
-ENGINE_ID = "local-qwen-q4-reference-v2"
-RELEASE_ID = "2026-10-21.2"
+APP_VERSION = "1.2.0"
+ENGINE_ID = "local-qwen-q4-detail-v3"
+RELEASE_ID = "2026-10-21.3"
 BUILD_REVISION = RELEASE_ID
 BUILD_SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = BUILD_SCRIPT_DIR

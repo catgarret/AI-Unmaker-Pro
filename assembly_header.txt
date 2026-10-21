@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""AI Unmarker Pro v1.1.0: unified local processing and official verification.
+"""AI Unmarker Pro v1.2.0: unified local processing and official verification.
 
 Run: python main.py
 Build: python build.py
@@ -18,9 +18,9 @@ from __future__ import annotations
 import os
 import sys
 
-APP_VERSION = "1.1.0"
-ENGINE_ID = "local-qwen-q4-reference-v2"
-RELEASE_ID = "2026-10-21.2"
+APP_VERSION = "1.2.0"
+ENGINE_ID = "local-qwen-q4-detail-v3"
+RELEASE_ID = "2026-10-21.3"
 
 # Leave CPU capacity for the desktop while a single image is being processed.
 for _thread_option in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",

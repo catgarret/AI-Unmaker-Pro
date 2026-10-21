@@ -5,7 +5,7 @@ import ast
 
 ROOT = Path(__file__).resolve().parent
 PARTS = ("runtime_setup.py", "file_publish.py", "metadata_core.py", "visible_bridge.py",
-         "model_runtime.py", "qwen_inference.py", "pixel_engine.py", "open_watermark_bridge.py", "worker_runtime.py", "provenance.py", "app_backend.py",
+         "model_runtime.py", "detail_restore.py", "qwen_inference.py", "pixel_engine.py", "open_watermark_bridge.py", "worker_runtime.py", "provenance.py", "app_backend.py",
          "ui_assets.py", "bootstrap_ui.py", "desktop_ui.py")
 
 
