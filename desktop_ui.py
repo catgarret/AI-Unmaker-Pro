@@ -1,6 +1,8 @@
 # 첨부 안내와 확장자를 분리해 문구 변경이 줄 간격에 영향을 주지 않게 합니다.
 UI_UPLOAD_FORMATS = "PNG · JPG · WEBP"
 UI_UPLOAD_FORMAT_GAP = 10
+# 주 작업과 처리 옵션은 같은 크기로 유지해 문구가 바뀌어도 균형을 맞춥니다.
+UI_ACTION_BUTTON_HEIGHT = 40
 UI_SETUP_SPACING = {"outer": 20, "inner": 16, "title_body": 14, "body_lines": 4, "section": 12}
 
 
@@ -623,9 +625,9 @@ def launch_gui():
                 justify="center", wraplength=280)
             self.work_progress = ctk.CTkProgressBar(actions, mode="indeterminate", height=4,
                 progress_color=C["ink"], fg_color=C["soft"])
-            self.primary = self.button(actions, "이미지 선택", self._primary_action, primary=True, height=40)
+            self.primary = self.button(actions, "이미지 선택", self._primary_action, primary=True, height=UI_ACTION_BUTTON_HEIGHT)
             self.primary.pack(fill="x")
-            self.options_button = self.button(actions, "처리 옵션 · 기본", self._show_processing_options, height=30)
+            self.options_button = self.button(actions, "처리 옵션 · 기본", self._show_processing_options, height=UI_ACTION_BUTTON_HEIGHT)
             self.options_button.pack(fill="x", pady=(6, 0))
             self.secondary = self.button(actions, "다른 이미지", self._reset_and_pick, height=32)
             self.error_details = self.button(actions, "오류 상세", self._show_info, height=28)
